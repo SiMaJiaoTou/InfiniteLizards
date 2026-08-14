@@ -73,6 +73,7 @@ internal sealed partial class BehaviorController
             area,
             out var fullRenderSafeArea);
         var constrainedPosition = fullRenderSafeArea.Clamp(Position);
+        var safetyAdjustedThisStep = false;
         if (Vector2.DistanceSquared(constrainedPosition, Position) > 0.000001f)
         {
             // Display/taskbar geometry may change while this short event is
@@ -80,6 +81,7 @@ internal sealed partial class BehaviorController
             // immediately; the animation rig consumes the same screen delta.
             Position = constrainedPosition;
             _target = new Vector2(Position.X, _target.Y);
+            safetyAdjustedThisStep = true;
         }
 
         if (!hasExactFullRenderArea && LostGripPhase == LostGripFallPhase.Falling)
@@ -91,14 +93,19 @@ internal sealed partial class BehaviorController
             _lostGripTargetY = Position.Y;
             _lostGripTargetDistance = Math.Max(0f, Position.Y - _lostGripStartY);
             _target = Position;
-            BeginLostGripRegrip(Position.Y);
+            BeginLostGripRegrip(
+                Position.Y,
+                LostGripCatchReason.SafetyForced);
             return;
         }
 
         switch (LostGripPhase)
         {
             case LostGripFallPhase.Falling:
-                UpdateLostGripFreeFall(dt, fullRenderSafeArea.Bottom);
+                UpdateLostGripFreeFall(
+                    dt,
+                    fullRenderSafeArea.Bottom,
+                    safetyAdjustedThisStep);
                 break;
 
             case LostGripFallPhase.Regripping:
@@ -111,7 +118,10 @@ internal sealed partial class BehaviorController
         }
     }
 
-    private void UpdateLostGripFreeFall(float dt, float safeBottom)
+    private void UpdateLostGripFreeFall(
+        float dt,
+        float safeBottom,
+        bool safetyAdjustedThisStep)
     {
         var fall = _configuration.LostGripFall;
         var safeTargetY = Math.Min(_lostGripTargetY, safeBottom);
@@ -122,12 +132,17 @@ internal sealed partial class BehaviorController
             _lostGripTargetY = safeTargetY;
             _lostGripTargetDistance = Math.Max(0f, safeTargetY - _lostGripStartY);
             _target = new Vector2(Position.X, safeTargetY);
+            safetyAdjustedThisStep = true;
         }
 
         var remainingDistance = Math.Max(0f, safeTargetY - Position.Y);
         if (remainingDistance <= 0.001f)
         {
-            BeginLostGripRegrip(safeTargetY);
+            BeginLostGripRegrip(
+                safeTargetY,
+                safetyAdjustedThisStep
+                    ? LostGripCatchReason.SafetyForced
+                    : LostGripCatchReason.ReachedTarget);
             return;
         }
 
@@ -142,16 +157,23 @@ internal sealed partial class BehaviorController
 
         if (appliedDistance + 0.001f >= remainingDistance)
         {
-            BeginLostGripRegrip(safeTargetY);
+            BeginLostGripRegrip(
+                safeTargetY,
+                safetyAdjustedThisStep
+                    ? LostGripCatchReason.SafetyForced
+                    : LostGripCatchReason.ReachedTarget);
         }
     }
 
-    private void BeginLostGripRegrip(float targetY)
+    private void BeginLostGripRegrip(
+        float targetY,
+        LostGripCatchReason catchReason)
     {
         Position = new Vector2(Position.X, targetY);
         _lostGripDistance = _lostGripTargetDistance;
         _lostGripVerticalVelocity = 0f;
         _lostGripRegripProgress = 0f;
+        LostGripCatchReason = catchReason;
         LostGripPhase = LostGripFallPhase.Regripping;
         _stateTimer = _configuration.LostGripFall.RegripDuration;
     }
@@ -162,6 +184,7 @@ internal sealed partial class BehaviorController
         if (_stateTimer <= 0f && _lostGripRegripProgress >= 1f)
         {
             LostGripPhase = LostGripFallPhase.None;
+            LostGripCatchReason = LostGripCatchReason.None;
             TransitionTo(RoamingState.Idle, StateTransitionReason.FallComplete);
             _stateTimer = _configuration.LostGripFall.ResumeIdleDuration;
             _idleMayObserve = false;
@@ -183,6 +206,7 @@ internal sealed partial class BehaviorController
         _lostGripTargetDistance = 0f;
         _lostGripVerticalVelocity = 0f;
         _lostGripRegripProgress = 0f;
+        LostGripCatchReason = LostGripCatchReason.None;
     }
 
     private bool TryGetLostGripFullRenderSafeArea(

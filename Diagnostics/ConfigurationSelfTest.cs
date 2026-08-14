@@ -692,6 +692,20 @@ internal static class ConfigurationSelfTest
             }).Validate().Count > 0;
         var defaultFall = LizardConfiguration.Default.Behavior.LostGripFall;
         var defaultPhysics = LizardConfiguration.Default.Physics;
+        var minimumCatchPreparationDistance =
+            3f * defaultFall.MaximumFallVelocity /
+            LizardConfiguration.Default.Runtime.SimulationRate;
+        var catchPreparationBoundaryConfiguration = LizardConfiguration.Default with
+        {
+            Behavior = LizardConfiguration.Default.Behavior with
+            {
+                LostGripFall = defaultFall with
+                {
+                    MinimumDistance = minimumCatchPreparationDistance,
+                    ReachLeadDistance = minimumCatchPreparationDistance
+                }
+            }
+        };
         var lostGripConfigurationPassed =
             CreateConfigurationWithAfterForwardAction(AutonomousAction.LostGripFall)
                 .Validate().Count == 0 &&
@@ -772,6 +786,27 @@ internal static class ConfigurationSelfTest
                         RegripReachAgility = 1.01f,
                         RegripOutwardCuriosity = 1.01f,
                         RegripHoldCalmness = 1.01f
+                    }
+                }
+            }).Validate().Count > 0 &&
+            catchPreparationBoundaryConfiguration.Validate().Count == 0 &&
+            (catchPreparationBoundaryConfiguration with
+            {
+                Behavior = catchPreparationBoundaryConfiguration.Behavior with
+                {
+                    LostGripFall = catchPreparationBoundaryConfiguration.Behavior.LostGripFall with
+                    {
+                        MinimumDistance = minimumCatchPreparationDistance - 0.01f
+                    }
+                }
+            }).Validate().Count > 0 &&
+            (catchPreparationBoundaryConfiguration with
+            {
+                Behavior = catchPreparationBoundaryConfiguration.Behavior with
+                {
+                    LostGripFall = catchPreparationBoundaryConfiguration.Behavior.LostGripFall with
+                    {
+                        ReachLeadDistance = minimumCatchPreparationDistance - 0.01f
                     }
                 }
             }).Validate().Count > 0;

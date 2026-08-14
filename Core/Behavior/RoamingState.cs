@@ -26,6 +26,18 @@ internal enum LostGripFallPhase
     Regripping
 }
 
+/// <summary>
+/// Distinguishes a normal catch at the sampled endpoint from an emergency stop
+/// caused by a live work-area change. The application uses this result only at
+/// the Falling -> Regripping seam; it is not an additional FSM state.
+/// </summary>
+internal enum LostGripCatchReason
+{
+    None,
+    ReachedTarget,
+    SafetyForced
+}
+
 internal static class RoamingStateTraits
 {
     public static bool IsLocomoting(this RoamingState state) => state is

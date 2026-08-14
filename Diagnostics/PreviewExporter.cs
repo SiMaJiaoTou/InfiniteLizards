@@ -176,6 +176,38 @@ internal static class PreviewExporter
         const int regripFrames = 42;
         var lizard = new ProceduralLizard(LizardProfile.Default);
         var (view, board) = CreateBoard(lizard);
+        var fall = lizard.Profile.Behavior.LostGripFall;
+
+        // This is a normalized minimum-distance fall. Deriving the lead-in
+        // from the public profile keeps the preview aligned with runtime when
+        // an individual changes either distance instead of copying an
+        // animation-only frame count.
+        var reachStartProgress = MathEx.Clamp01(
+            1f - fall.ReachLeadDistance / fall.MinimumDistance);
+        var reachStartFrame = Math.Clamp(
+            (int)MathF.Floor(reachStartProgress * fallFrames),
+            0,
+            fallFrames - 1);
+        var reachMidFrame = Math.Clamp(
+            (int)MathF.Floor(MathEx.Lerp(reachStartProgress, 1f, 0.5f) * fallFrames),
+            reachStartFrame,
+            fallFrames - 1);
+        var contactFrame = fallFrames - 1;
+        var holdFrame = fallFrames + Math.Clamp(
+            (int)MathF.Floor(
+                regripFrames *
+                lizard.Profile.Physics.RegripContactHoldFraction *
+                0.5f),
+            0,
+            regripFrames - 1);
+        var recoveryProgress = MathEx.Lerp(
+            lizard.Profile.Physics.RegripContactHoldFraction,
+            1f,
+            0.55f);
+        var recoveryFrame = fallFrames + Math.Clamp(
+            (int)MathF.Floor(regripFrames * recoveryProgress),
+            0,
+            regripFrames - 1);
 
         // Establish a planted crawling pose before the unexpected loss of
         // support. FreeFall then enters the production particle rig without a
@@ -194,6 +226,12 @@ internal static class PreviewExporter
             var falling = frame < fallFrames;
             var phaseFrame = falling ? frame : frame - fallFrames;
             var phaseCount = falling ? fallFrames : regripFrames;
+            var dropProgress = MathEx.Clamp01((phaseFrame + 1f) / phaseCount);
+            var catchPreparationProgress = falling && dropProgress > reachStartProgress
+                ? MathEx.Clamp01(
+                    (dropProgress - reachStartProgress) /
+                    Math.Max(0.0001f, 1f - reachStartProgress))
+                : 0f;
             lizard.Update(
                 1f / 60f,
                 new LizardAnimationInput(
@@ -201,8 +239,11 @@ internal static class PreviewExporter
                     0f,
                     falling ? LizardPoseMode.FreeFall : LizardPoseMode.Regrip,
                     mood,
-                    MathEx.Clamp01((phaseFrame + 1f) / phaseCount),
-                    Vector2.Zero));
+                    dropProgress,
+                    Vector2.Zero)
+                {
+                    CatchPreparationProgress = catchPreparationProgress
+                });
             view.Present(lizard.CaptureRenderFrame(), Vector2.UnitY);
             Save(board, Path.Combine(directory, $"lost-grip-sequence-{frame:000}.png"));
             if (frame == fallFrames / 2)
@@ -212,6 +253,26 @@ internal static class PreviewExporter
             if (frame == fallFrames + regripFrames / 2)
             {
                 Save(board, Path.Combine(directory, "12-regrip.png"));
+            }
+            if (frame == reachStartFrame)
+            {
+                Save(board, Path.Combine(directory, "11-lost-grip-reach-start.png"));
+            }
+            if (frame == reachMidFrame)
+            {
+                Save(board, Path.Combine(directory, "12-lost-grip-reach-mid.png"));
+            }
+            if (frame == contactFrame)
+            {
+                Save(board, Path.Combine(directory, "13-lost-grip-contact.png"));
+            }
+            if (frame == holdFrame)
+            {
+                Save(board, Path.Combine(directory, "14-regrip-contact-hold.png"));
+            }
+            if (frame == recoveryFrame)
+            {
+                Save(board, Path.Combine(directory, "15-regrip-recovery.png"));
             }
         }
     }

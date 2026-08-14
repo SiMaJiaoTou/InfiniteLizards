@@ -34,6 +34,7 @@ internal readonly record struct BehaviorDebugSnapshot(
     EmotionBlend Emotion,
     float DropProgress,
     LostGripFallPhase LostGripPhase,
+    LostGripCatchReason LostGripCatchReason,
     float LostGripFallProgress,
     float LostGripReachProgress,
     float LostGripRegripProgress,

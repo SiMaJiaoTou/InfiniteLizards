@@ -106,6 +106,34 @@ internal sealed record LizardConfiguration
                     "runtime simulation step must be inside the dangling-physics simulation-step range.");
             }
         }
+        if (Behavior?.LostGripFall is not null &&
+            Runtime is not null &&
+            float.IsFinite(Runtime.SimulationRate) && Runtime.SimulationRate > 0f &&
+            float.IsFinite(Behavior.LostGripFall.MinimumDistance) &&
+            Behavior.LostGripFall.MinimumDistance > 0f &&
+            float.IsFinite(Behavior.LostGripFall.ReachLeadDistance) &&
+            Behavior.LostGripFall.ReachLeadDistance > 0f &&
+            float.IsFinite(Behavior.LostGripFall.MaximumFallVelocity) &&
+            Behavior.LostGripFall.MaximumFallVelocity > 0f)
+        {
+            const float minimumPreparationStepCount = 3f;
+            var requiredPreparationDistance =
+                minimumPreparationStepCount *
+                Behavior.LostGripFall.MaximumFallVelocity /
+                Runtime.SimulationRate;
+            var effectivePreparationDistance = Math.Min(
+                Behavior.LostGripFall.MinimumDistance,
+                Behavior.LostGripFall.ReachLeadDistance);
+            if (effectivePreparationDistance + 0.0001f < requiredPreparationDistance)
+            {
+                failures.Add(
+                    "lost-grip effective catch-preparation distance " +
+                    "min(MinimumDistance, ReachLeadDistance) must cover at least " +
+                    $"3 fixed simulation steps at MaximumFallVelocity " +
+                    $"({requiredPreparationDistance:F2} screen pixels required; " +
+                    $"configured {effectivePreparationDistance:F2}).");
+            }
+        }
         return new ReadOnlyCollection<string>(failures);
     }
 

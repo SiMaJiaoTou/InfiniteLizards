@@ -152,6 +152,11 @@ internal static class DiagnosticCommandRunner
         $"target-distance bound violations: {result.TargetDistanceBoundaryViolations}",
         $"maximum fall velocity: {result.MaximumFallVelocity:F2} px/s",
         $"maximum regrip pose jump / world-centroid catch error / drift: {result.MaximumRegripPoseJump:F3} model px / {result.MaximumCatchCentroidError:F3} px / {result.MaximumRegripCentroidDrift:F3} px",
+        $"seeking/contact coverage / ordering-direction-stop violations: {result.ReachSeekingEntries}/{result.ContactHoldEntries} / {result.ReachOrderingViolations}-{result.ReachDirectionViolations}-{result.ContactStopViolations}",
+        $"minimum nonzero seek steps / behavior reach peak: {result.MinimumNonZeroSeekingSteps}/{result.MinimumBehaviorReachPeak:F3}",
+        $"minimum target reduction / upward travel / travel toward catch point: {result.MinimumReachTargetErrorReduction:F2}/{result.MinimumFrontFootUpwardTravel:F2}/{result.MinimumFrontPawCatchDirectionTravel:F2} model px",
+        $"maximum reach-entry jump / terminal-contact error / hold error: {result.MaximumReachEntryPoseJump:F3}/{result.MaximumTerminalReachError:F3}/{result.MaximumContactError:F3} model px",
+        $"maximum contact spine / window / visual-centroid drift: {result.MaximumContactSpineDrift:F4} model px / {result.MaximumPostContactWindowDrift:F4}/{result.MaximumPostContactVisualCentroidDrift:F3} screen px",
         $"maximum constraint/grab error: {result.MaximumConstraintError:F3}/{result.MaximumGrabError:F3} model px",
         $"containment total/max: {result.MaximumContainmentCorrectionTotal:F4}/{result.MaximumContainmentCorrection:F4} model px",
         $"reference correction total/max/center error: {result.MaximumReferenceCorrectionTotal:F3}/{result.MaximumReferenceCorrection:F3}/{result.MaximumReferenceCenterError:F4} model px",
@@ -160,6 +165,8 @@ internal static class DiagnosticCommandRunner
         $"monotonicity/non-finite violations: {result.MonotonicityViolations}/{result.NonFiniteSamples}",
         $"truncated fall / near-bottom cancellation: {result.TruncatedFallPassed}/{result.NearBottomCancellationPassed}",
         $"left/right/top / undersized-area cancellation: {result.SideEdgeCancellationPassed}/{result.TinyAreaCancellationPassed}",
+        $"non-FreeFall catch-input / real-Grab isolation / real-Grab max error: {result.NonFreeFallInputIsolationPassed}/{result.RealGrabAnimationIsolationPassed}/{result.RealGrabMaximumError:F3}",
+        $"mid-seeking safety-loss fallback / local-pose jump / boundary margin / fake contacts: {result.MidSeekingSafetyLossFallbackPassed}/{result.MaximumSafetyLossPoseJump:F3} model px/{result.MinimumSafetyLossBoundaryMargin:F2}px/{result.SafetyLossFakeContactSamples}",
         $"pointer / real-grab / pause priority: {result.PointerPriorityPassed}/{result.GrabPriorityPassed}/{result.PausePriorityPassed}",
         $"Chinese debug labels: {result.DebugChineseLabelsPassed}");
 

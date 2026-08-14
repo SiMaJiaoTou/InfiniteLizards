@@ -7,6 +7,8 @@ namespace DesktopLizard.Core;
 internal sealed class ProceduralLizard
 {
     private const float RasterContainmentMargin = 2f;
+    private const float RegripCompletionEpsilon = 0.0001f;
+    private const float RegripContactTolerance = 0.25f;
     private readonly LizardProfile _profile;
     private readonly GaitConfiguration _gait;
     private readonly PhysicsConfiguration _physics;
@@ -18,6 +20,7 @@ internal sealed class ProceduralLizard
     private readonly LegRig[] _legs;
     private readonly DiagonalGaitController _gaitController;
     private readonly DanglingRig2D _danglingRig;
+    private readonly RegripPoseController _regripPoseController;
     private readonly SecondaryMotionController _secondaryMotionController;
     private float _heading;
     private Vector2 _grabAnchor;
@@ -54,6 +57,20 @@ internal sealed class ProceduralLizard
         _danglingRig.FreeFallReferenceCorrectionMaximum;
     internal float FreeFallReferenceCenterError =>
         _danglingRig.FreeFallReferenceCenterError;
+    internal LizardPoseMode CurrentPoseMode { get; private set; }
+    internal RegripAnimationPhase RegripAnimationPhase =>
+        _regripPoseController.Phase;
+    internal bool RegripReachActive => _regripPoseController.ReachActive;
+    internal float RegripReachProgress => _regripPoseController.ReachProgress;
+    internal Vector2 RegripFrontContactTarget0 =>
+        _regripPoseController.ContactTarget0;
+    internal Vector2 RegripFrontContactTarget1 =>
+        _regripPoseController.ContactTarget1;
+    internal int RegripContactLegMask => _regripPoseController.ContactLegMask;
+    internal bool RegripContacted => _regripPoseController.Contacted;
+    internal float RegripContactError => _regripPoseController.ContactError;
+    internal float RegripContactSpineDrift =>
+        _regripPoseController.ContactSpineDrift;
 
     public ProceduralLizard(LizardProfile? profile = null)
     {
@@ -92,6 +109,7 @@ internal sealed class ProceduralLizard
             _physics,
             _bodyWidths.Length,
             _appearance.RenderCanvasSize * _physics.MaximumCoordinateCanvasFactor);
+        _regripPoseController = new RegripPoseController(_bodyWidths.Length);
         _secondaryMotionController = new SecondaryMotionController(
             _secondaryMotion,
             _profile.Traits.Seed);
@@ -213,6 +231,7 @@ internal sealed class ProceduralLizard
         {
             _danglingRig.End();
         }
+        _regripPoseController.Reset();
         _gaitController.ResetTracking();
     }
 
@@ -220,6 +239,7 @@ internal sealed class ProceduralLizard
     {
         dt = Math.Clamp(dt, 0f, 0.05f);
         Emotion = input.Emotion;
+        CurrentPoseMode = input.PoseMode;
 
         var pointerGrabbed = input.PoseMode == LizardPoseMode.Grabbed;
         var freeFalling = input.PoseMode == LizardPoseMode.FreeFall;
@@ -269,6 +289,7 @@ internal sealed class ProceduralLizard
             if (pointerGrabbed)
             {
                 _freeFallMetricsActive = false;
+                _regripPoseController.Reset();
                 _danglingRig.Update(this, dt, _grabAnchor, input.ScreenDeltaModel);
             }
             else if (freeFalling)
@@ -279,13 +300,29 @@ internal sealed class ProceduralLizard
                     _freeFallContainmentCorrectionMaximum = 0f;
                     _freeFallMetricsActive = true;
                 }
-                _danglingRig.UpdateFreeFall(this, dt, input.ScreenDeltaModel);
+                _danglingRig.UpdateFreeFall(
+                    this,
+                    dt,
+                    input.ScreenDeltaModel,
+                    input.CatchPreparationProgress);
                 var containmentCorrection = KeepParticlePoseInsideRenderCanvas();
                 var containmentDistance = containmentCorrection.Length();
                 _freeFallContainmentCorrectionTotal += containmentDistance;
                 _freeFallContainmentCorrectionMaximum = Math.Max(
                     _freeFallContainmentCorrectionMaximum,
                     containmentDistance);
+                if (_danglingRig.FreeFallReachActive)
+                {
+                    _regripPoseController.ObserveSeeking(
+                        _danglingRig.FreeFallReachProgress,
+                        _danglingRig.FreeFallReachTarget0,
+                        _danglingRig.FreeFallReachTarget1,
+                        _danglingRig.FreeFallReachTargetError);
+                }
+                else
+                {
+                    _regripPoseController.ObserveFreeFallWithoutReach();
+                }
             }
             _releasePoseBlend = 0f;
             _secondaryMotionController.Update(
@@ -302,6 +339,15 @@ internal sealed class ProceduralLizard
 
         if (endingParticlePose)
         {
+            var endingFreeFallPose = _danglingRig.IsFreeFallActive;
+            var completedRegripReach =
+                _danglingRig.FreeFallReachActive &&
+                _danglingRig.FreeFallReachProgress >=
+                1f - RegripCompletionEpsilon &&
+                _danglingRig.FreeFallReachTargetError <=
+                RegripContactTolerance;
+            var regripTarget0 = _danglingRig.FreeFallReachTarget0;
+            var regripTarget1 = _danglingRig.FreeFallReachTarget1;
             _danglingRig.End();
             for (var i = 0; i < Spine.Joints.Count; i++)
             {
@@ -314,8 +360,28 @@ internal sealed class ProceduralLizard
             }
             _heading = Spine.Angles[0];
             forward = MathEx.FromAngle(_heading);
-            _releasePoseBlend = 1f;
+            if (endingFreeFallPose &&
+                completedRegripReach &&
+                input.PoseMode == LizardPoseMode.Regrip)
+            {
+                _regripPoseController.BeginContact(
+                    Spine,
+                    _legs,
+                    regripTarget0,
+                    regripTarget1);
+                _releasePoseBlend = 0f;
+            }
+            else
+            {
+                _regripPoseController.Reset();
+                _releasePoseBlend = 1f;
+            }
             _gaitController.ResetSupportState();
+        }
+        else if (input.PoseMode != LizardPoseMode.Regrip &&
+                 _regripPoseController.HasContactPose)
+        {
+            _regripPoseController.Reset();
         }
 
         var headTarget = Spine.Joints[0] + locomotionDelta;
@@ -323,9 +389,20 @@ internal sealed class ProceduralLizard
         var visualHeadAnchor = _canvasCenter + forward * _appearance.HeadAnchorOffset;
         Spine.Translate(visualHeadAnchor - Spine.Joints[0]);
 
+        var regripRecoveryActive =
+            input.PoseMode == LizardPoseMode.Regrip &&
+            _regripPoseController.HasContactPose;
         var recoveringFromGrab = _releasePoseBlend > 0f;
-        var recoveryT = 1f - SmoothStep(_releasePoseBlend);
-        if (recoveringFromGrab)
+        var recoveryT = regripRecoveryActive
+            ? _regripPoseController.PrepareRecovery(
+                input.DropProgress,
+                _physics.RegripContactHoldFraction)
+            : 1f - SmoothStep(_releasePoseBlend);
+        if (regripRecoveryActive)
+        {
+            _regripPoseController.ApplySpineBlend(Spine, recoveryT);
+        }
+        else if (recoveringFromGrab)
         {
             for (var i = 0; i < Spine.Joints.Count; i++)
             {
@@ -338,21 +415,39 @@ internal sealed class ProceduralLizard
         // Preserve the planted desktop position unless an extreme body turn
         // would make the two-link leg physically impossible. In that rare case
         // project the paw onto the reach boundary instead of drawing a spoke.
-        if (recoveringFromGrab)
+        if (regripRecoveryActive || recoveringFromGrab)
         {
             foreach (var leg in _legs)
             {
                 var targetFoot = GetFootHome(leg, 0f);
                 leg.ForceFoot(targetFoot);
                 var targetElbow = leg.Elbow;
-                leg.SetDanglingPose(
-                    leg.Shoulder,
-                    Vector2.Lerp(_releaseElbows[leg.Index], targetElbow, recoveryT),
-                    Vector2.Lerp(_releaseFeet[leg.Index], targetFoot, recoveryT));
+                if (regripRecoveryActive)
+                {
+                    _regripPoseController.ApplyLegBlend(
+                        leg,
+                        targetElbow,
+                        targetFoot,
+                        recoveryT);
+                }
+                else
+                {
+                    leg.SetDanglingPose(
+                        leg.Shoulder,
+                        Vector2.Lerp(_releaseElbows[leg.Index], targetElbow, recoveryT),
+                        Vector2.Lerp(_releaseFeet[leg.Index], targetFoot, recoveryT));
+                }
             }
-            _releasePoseBlend = Math.Max(
-                0f,
-                _releasePoseBlend - dt / _physics.ReleasePoseRecoveryDuration);
+            if (regripRecoveryActive)
+            {
+                _regripPoseController.UpdateContactMetrics(Spine, _legs);
+            }
+            else
+            {
+                _releasePoseBlend = Math.Max(
+                    0f,
+                    _releasePoseBlend - dt / _physics.ReleasePoseRecoveryDuration);
+            }
         }
         else
         {

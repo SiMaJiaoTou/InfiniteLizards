@@ -26,6 +26,22 @@ internal readonly record struct LostGripFallTestResult(
     float MaximumReferenceCorrectionTotal,
     float MaximumReferenceCorrection,
     float MaximumReferenceCenterError,
+    int ReachSeekingEntries,
+    int ContactHoldEntries,
+    int ReachOrderingViolations,
+    int ReachDirectionViolations,
+    int ContactStopViolations,
+    int MinimumNonZeroSeekingSteps,
+    float MinimumBehaviorReachPeak,
+    float MinimumReachTargetErrorReduction,
+    float MinimumFrontFootUpwardTravel,
+    float MinimumFrontPawCatchDirectionTravel,
+    float MaximumReachEntryPoseJump,
+    float MaximumTerminalReachError,
+    float MaximumContactError,
+    float MaximumContactSpineDrift,
+    float MaximumPostContactWindowDrift,
+    float MaximumPostContactVisualCentroidDrift,
     float MinimumCanvasMargin,
     int NavigationBoundaryViolations,
     int FullRenderBoundaryViolations,
@@ -46,6 +62,13 @@ internal readonly record struct LostGripFallTestResult(
     bool NearBottomCancellationPassed,
     bool SideEdgeCancellationPassed,
     bool TinyAreaCancellationPassed,
+    bool NonFreeFallInputIsolationPassed,
+    bool RealGrabAnimationIsolationPassed,
+    float RealGrabMaximumError,
+    bool MidSeekingSafetyLossFallbackPassed,
+    float MaximumSafetyLossPoseJump,
+    float MinimumSafetyLossBoundaryMargin,
+    int SafetyLossFakeContactSamples,
     bool PointerPriorityPassed,
     bool GrabPriorityPassed,
     bool PausePriorityPassed,
@@ -138,12 +161,35 @@ internal static class LostGripFallSelfTest
             RunSideEdgeCancellations(profile, screen));
         var tinyAreaCancellationPassed = RunTinyAreaCancellations(profile);
         RunHeightScalingChecks(profile, screens[0], screens[^1], metrics);
+        var nonFreeFallInputIsolationPassed = RunNonFreeFallInputIsolation(profile);
+        var realGrabAnimationIsolationPassed = RunRealGrabAnimationIsolation(
+            profile,
+            screens[1],
+            out var realGrabMaximumError);
+        var safetyLossFallback = RunMidSeekingSafetyLossFallback(
+            profile,
+            screens[^1]);
         var grabPriorityPassed = RunGrabPriority(profile, screens[1]);
         var pausePriorityPassed = RunPausePriority(profile, screens[1]);
         var debugChineseLabelsPassed =
             DebugPanelView.StateLabel(RoamingState.LostGripFall) == "失手下坠" &&
             DebugPanelView.LostGripPhaseLabel(LostGripFallPhase.Falling) == "自由下坠" &&
-            DebugPanelView.LostGripPhaseLabel(LostGripFallPhase.Regripping) == "重新抓稳";
+            DebugPanelView.LostGripPhaseLabel(LostGripFallPhase.Regripping) == "重新抓稳" &&
+            DebugPanelView.LostGripProgressLabel(
+                LostGripFallPhase.Falling,
+                LostGripCatchReason.None,
+                0.42f,
+                0f) == "伸手42%" &&
+            DebugPanelView.LostGripProgressLabel(
+                LostGripFallPhase.Regripping,
+                LostGripCatchReason.ReachedTarget,
+                0f,
+                0.5f) == "抓稳50%" &&
+            DebugPanelView.LostGripProgressLabel(
+                LostGripFallPhase.Regripping,
+                LostGripCatchReason.SafetyForced,
+                0f,
+                0.5f) == "安全恢复50%";
 
         if (!float.IsFinite(metrics.MinimumFallDistance))
         {
@@ -161,6 +207,7 @@ internal static class LostGripFallSelfTest
         {
             metrics.MinimumVisualMargin = 0f;
         }
+        metrics.NormalizeReachMinimums();
 
         return new LostGripFallTestResult(
             false,
@@ -182,6 +229,22 @@ internal static class LostGripFallSelfTest
             metrics.MaximumReferenceCorrectionTotal,
             metrics.MaximumReferenceCorrection,
             metrics.MaximumReferenceCenterError,
+            metrics.ReachSeekingEntries,
+            metrics.ContactHoldEntries,
+            metrics.ReachOrderingViolations,
+            metrics.ReachDirectionViolations,
+            metrics.ContactStopViolations,
+            metrics.MinimumNonZeroSeekingSteps,
+            metrics.MinimumBehaviorReachPeak,
+            metrics.MinimumReachTargetErrorReduction,
+            metrics.MinimumFrontFootUpwardTravel,
+            metrics.MinimumFrontPawCatchDirectionTravel,
+            metrics.MaximumReachEntryPoseJump,
+            metrics.MaximumTerminalReachError,
+            metrics.MaximumContactError,
+            metrics.MaximumContactSpineDrift,
+            metrics.MaximumPostContactWindowDrift,
+            metrics.MaximumPostContactVisualCentroidDrift,
             metrics.MinimumCanvasMargin,
             metrics.NavigationBoundaryViolations,
             metrics.FullRenderBoundaryViolations,
@@ -202,6 +265,13 @@ internal static class LostGripFallSelfTest
             nearBottomCancellationPassed,
             sideEdgeCancellationPassed,
             tinyAreaCancellationPassed,
+            nonFreeFallInputIsolationPassed,
+            realGrabAnimationIsolationPassed,
+            realGrabMaximumError,
+            safetyLossFallback.Passed,
+            safetyLossFallback.MaximumPoseJump,
+            safetyLossFallback.MinimumBoundaryMargin,
+            safetyLossFallback.FakeContactSamples,
             metrics.PointerPriorityViolations == 0,
             grabPriorityPassed,
             pausePriorityPassed,
@@ -234,6 +304,9 @@ internal static class LostGripFallSelfTest
         var entryWorldSpineCenter = Vector2.Zero;
         var regripWorldSpineCenter = Vector2.Zero;
         var hasRegripWorldSpineCenter = false;
+        var reachProbe = new LostGripRegripAnimationProbe(
+            behavior.Position,
+            lizard);
 
         for (var step = 0; step < 12f / DeltaTime; step++)
         {
@@ -340,7 +413,7 @@ internal static class LostGripFallSelfTest
                 metrics.AutonomousRecoveries++;
             }
 
-            ObserveSafety(
+            var visualCenter = ObserveSafety(
                 profile,
                 screen,
                 behavior,
@@ -364,6 +437,10 @@ internal static class LostGripFallSelfTest
             }
 
             var currentPose = PoseSnapshot.Capture(lizard);
+            reachProbe.Observe(
+                behavior,
+                lizard,
+                visualCenter);
             if (previousDangling &&
                 !debugPose.DanglingActive &&
                 behavior.LostGripPhase == LostGripFallPhase.Regripping)
@@ -402,6 +479,7 @@ internal static class LostGripFallSelfTest
 
             if (recovered)
             {
+                metrics.RecordReach(reachProbe.Complete());
                 metrics.CompletedScenarios++;
                 return;
             }
@@ -642,6 +720,272 @@ internal static class LostGripFallSelfTest
         return behavior.State == RoamingState.ReleaseSettle && IsFinite(session);
     }
 
+    private static bool RunNonFreeFallInputIsolation(LizardProfile profile)
+    {
+        var lizard = new ProceduralLizard(profile);
+        var mood = EmotionBlend.Normalize(new EmotionBlend(0.25f, 0.25f, 0.25f, 0.25f));
+        var nonFallInput = new LizardAnimationInput(
+            0f,
+            0f,
+            LizardPoseMode.Rest,
+            mood,
+            0f,
+            Vector2.Zero)
+        {
+            CatchPreparationProgress = 1f
+        };
+        lizard.Update(DeltaTime, nonFallInput);
+        var restIsolated =
+            lizard.CurrentPoseMode == LizardPoseMode.Rest &&
+            lizard.RegripAnimationPhase == RegripAnimationPhase.None &&
+            !lizard.RegripReachActive &&
+            lizard.RegripReachProgress == 0f &&
+            !lizard.RegripContacted &&
+            lizard.RegripContactLegMask == 0;
+
+        lizard.BeginGrab(lizard.Spine.Joints[6]);
+        var grabbedInput = nonFallInput with { PoseMode = LizardPoseMode.Grabbed };
+        lizard.Update(DeltaTime, grabbedInput);
+        return restIsolated &&
+               lizard.CurrentPoseMode == LizardPoseMode.Grabbed &&
+               lizard.RegripAnimationPhase == RegripAnimationPhase.None &&
+               !lizard.RegripReachActive &&
+               lizard.RegripReachProgress == 0f &&
+               !lizard.RegripContacted &&
+               lizard.RegripContactLegMask == 0 &&
+               lizard.Spine.Joints.All(IsFinite) &&
+               lizard.Legs.All(leg => IsFinite(leg.Elbow) && IsFinite(leg.Foot));
+    }
+
+    private static bool RunRealGrabAnimationIsolation(
+        LizardProfile profile,
+        ScreenContext screen,
+        out float maximumGrabError)
+    {
+        var session = new PetSimulationSession(0x5B91, profile);
+        session.Reset(screen.NavigationArea.Center, 0f);
+        var behavior = session.BehaviorForDiagnostics;
+        var lizard = session.LizardForDiagnostics;
+        session.BeginGrab(lizard.Spine.Joints[6]);
+        maximumGrabError = 0f;
+        var passed = behavior.State == RoamingState.Grabbed;
+        for (var step = 0; step < 0.75f / DeltaTime; step++)
+        {
+            var target = screen.NavigationArea.Center + new Vector2(
+                MathF.Sin(step * 0.071f) * 36f,
+                MathF.Cos(step * 0.053f) * 24f);
+            session.DragTo(target);
+            session.Advance(Input(
+                DeltaTime,
+                screen.NavigationArea,
+                profile,
+                isDragging: true,
+                lostGripSafety: screen.LostGripSafety));
+            maximumGrabError = Math.Max(maximumGrabError, lizard.DanglingGrabError);
+            passed &=
+                behavior.State == RoamingState.Grabbed &&
+                lizard.CurrentPoseMode == LizardPoseMode.Grabbed &&
+                lizard.RegripAnimationPhase == RegripAnimationPhase.None &&
+                !lizard.RegripReachActive &&
+                lizard.RegripReachProgress == 0f &&
+                !lizard.RegripContacted &&
+                lizard.RegripContactLegMask == 0 &&
+                lizard.DanglingGrabError <= profile.Physics.MaximumGrabError + 0.001f &&
+                lizard.DanglingConstraintError <=
+                    profile.Physics.MaximumConstraintError + 0.001f &&
+                IsFinite(session);
+        }
+        session.EndGrab(behavior.Position);
+        return passed &&
+               behavior.State == RoamingState.ReleaseSettle &&
+               IsFinite(session);
+    }
+
+    private static SafetyLossFallbackResult RunMidSeekingSafetyLossFallback(
+        LizardProfile profile,
+        ScreenContext screen)
+    {
+        const float ForcedHostShift = 8f;
+        const float PartialReachMinimum = 0.25f;
+        const float PartialReachMaximum = 0.75f;
+        var safeArea = screen.LostGripSafety.SafeArea;
+        var start = new Vector2(safeArea.Center.X, safeArea.Top + 2f);
+        var session = CreateDebugPlaybackSession(
+            profile,
+            screen.NavigationArea,
+            screen.LostGripSafety,
+            start,
+            0x67D5);
+        var started = session.TryPlayDebugAction(
+            AutonomousAction.LostGripFall,
+            screen.NavigationArea,
+            screen.LostGripSafety);
+        if (started.Status != DebugPlaybackStatus.Started)
+        {
+            return SafetyLossFallbackResult.Failed;
+        }
+
+        var behavior = session.BehaviorForDiagnostics;
+        var lizard = session.LizardForDiagnostics;
+        var foundPartialSeeking = false;
+        for (var step = 0; step < 8f / DeltaTime; step++)
+        {
+            session.Advance(Input(
+                DeltaTime,
+                screen.NavigationArea,
+                profile,
+                lostGripSafety: screen.LostGripSafety));
+            if (behavior.LostGripPhase == LostGripFallPhase.Falling &&
+                lizard.RegripAnimationPhase == RegripAnimationPhase.Seeking &&
+                lizard.RegripReachProgress >= PartialReachMinimum &&
+                lizard.RegripReachProgress <= PartialReachMaximum &&
+                !lizard.RegripContacted &&
+                lizard.RegripContactLegMask == 0)
+            {
+                foundPartialSeeking = true;
+                break;
+            }
+        }
+        if (!foundPartialSeeking)
+        {
+            return SafetyLossFallbackResult.Failed;
+        }
+
+        var previousPosition = behavior.Position;
+        var previousPose = PoseSnapshot.Capture(lizard);
+        var previousReachProgress = lizard.RegripReachProgress;
+        var forcedLeft = previousPosition.X + ForcedHostShift;
+        if (forcedLeft >= safeArea.Right - 1f)
+        {
+            return SafetyLossFallbackResult.Failed;
+        }
+        var unavailableSafety = new LostGripSafetyContext(
+            new FloatRect(
+                forcedLeft,
+                safeArea.Top,
+                safeArea.Right,
+                safeArea.Bottom),
+            IsAvailable: false);
+
+        var maximumPoseJump = 0f;
+        var minimumBoundaryMargin = float.PositiveInfinity;
+        var fakeContactSamples = 0;
+        var finiteAndBounded = true;
+
+        var movingFallbackFrame = session.Advance(Input(
+            DeltaTime,
+            screen.NavigationArea,
+            profile,
+            lostGripSafety: unavailableSafety));
+        ObserveFallbackFrame(movingFallbackFrame);
+        var partialMovingFallback =
+            behavior.LostGripPhase == LostGripFallPhase.Regripping &&
+            behavior.LostGripCatchReason == LostGripCatchReason.SafetyForced &&
+            behavior.Position.X >= forcedLeft - 0.001f &&
+            Vector2.Distance(previousPosition, behavior.Position) > 0.001f &&
+            lizard.CurrentPoseMode == LizardPoseMode.FreeFall &&
+            lizard.RegripAnimationPhase == RegripAnimationPhase.Seeking &&
+            lizard.RegripReachActive &&
+            lizard.RegripReachProgress > 0f &&
+            lizard.RegripReachProgress < 1f - 0.0001f &&
+            lizard.RegripReachProgress <= previousReachProgress + 0.08f &&
+            !lizard.RegripContacted &&
+            lizard.RegripContactLegMask == 0;
+
+        var stationaryFallbackFrame = session.Advance(Input(
+            DeltaTime,
+            screen.NavigationArea,
+            profile,
+            lostGripSafety: unavailableSafety));
+        ObserveFallbackFrame(stationaryFallbackFrame);
+        var continuousNonContactFallback =
+            behavior.LostGripPhase == LostGripFallPhase.Regripping &&
+            behavior.LostGripCatchReason == LostGripCatchReason.SafetyForced &&
+            lizard.CurrentPoseMode == LizardPoseMode.Regrip &&
+            lizard.RegripAnimationPhase == RegripAnimationPhase.None &&
+            !lizard.RegripReachActive &&
+            lizard.RegripReachProgress == 0f &&
+            !lizard.RegripContacted &&
+            lizard.RegripContactLegMask == 0 &&
+            !lizard.CaptureDebugSnapshot().DanglingActive;
+
+        var recovered = false;
+        for (var step = 0; step < 2f / DeltaTime; step++)
+        {
+            var frame = session.Advance(Input(
+                DeltaTime,
+                screen.NavigationArea,
+                profile,
+                lostGripSafety: unavailableSafety));
+            ObserveFallbackFrame(frame);
+            if (behavior.State == RoamingState.Idle &&
+                behavior.LostGripPhase == LostGripFallPhase.None &&
+                lizard.RegripAnimationPhase == RegripAnimationPhase.None)
+            {
+                recovered = true;
+                break;
+            }
+        }
+
+        if (!float.IsFinite(minimumBoundaryMargin))
+        {
+            minimumBoundaryMargin = float.NegativeInfinity;
+        }
+        var passed =
+            partialMovingFallback &&
+            continuousNonContactFallback &&
+            recovered &&
+            finiteAndBounded &&
+            maximumPoseJump <= 3f &&
+            minimumBoundaryMargin >= -0.001f &&
+            fakeContactSamples == 0;
+        return new SafetyLossFallbackResult(
+            passed,
+            maximumPoseJump,
+            minimumBoundaryMargin,
+            fakeContactSamples);
+
+        void ObserveFallbackFrame(PetSimulationFrameOutput frame)
+        {
+            var pose = PoseSnapshot.Capture(lizard);
+            maximumPoseJump = Math.Max(
+                maximumPoseJump,
+                previousPose.MaximumDistance(pose));
+            previousPose = pose;
+
+            var drawableMargin = MeasureDrawableMargins(
+                profile,
+                screen.WorkArea,
+                behavior.Position,
+                frame.RenderFrame).Screen;
+            var hostMargin = Math.Min(
+                Math.Min(
+                    behavior.Position.X - screen.FullRenderRadius -
+                    screen.WorkArea.Left,
+                    screen.WorkArea.Right - behavior.Position.X -
+                    screen.FullRenderRadius),
+                Math.Min(
+                    behavior.Position.Y - screen.FullRenderRadius -
+                    screen.WorkArea.Top,
+                    screen.WorkArea.Bottom - behavior.Position.Y -
+                    screen.FullRenderRadius));
+            minimumBoundaryMargin = Math.Min(
+                minimumBoundaryMargin,
+                Math.Min(drawableMargin, hostMargin));
+            if (lizard.RegripAnimationPhase == RegripAnimationPhase.ContactHold ||
+                lizard.RegripContacted ||
+                lizard.RegripContactLegMask != 0)
+            {
+                fakeContactSamples++;
+            }
+            finiteAndBounded &=
+                screen.NavigationArea.Contains(behavior.Position) &&
+                IsFinite(session) &&
+                drawableMargin >= -0.001f &&
+                hostMargin >= -0.001f;
+        }
+    }
+
     private static bool RunPausePriority(LizardProfile profile, ScreenContext screen)
     {
         var session = CreateEnteredSession(profile, screen, 0x4FA7);
@@ -700,7 +1044,7 @@ internal static class LostGripFallSelfTest
         return null;
     }
 
-    private static void ObserveSafety(
+    private static Vector2 ObserveSafety(
         LizardProfile profile,
         ScreenContext screen,
         BehaviorController behavior,
@@ -712,6 +1056,7 @@ internal static class LostGripFallSelfTest
         {
             metrics.NavigationBoundaryViolations++;
         }
+        var visualCenter = behavior.Position;
         if (behavior.State == RoamingState.LostGripFall)
         {
             var safeBottom = screen.NavigationArea.Bottom -
@@ -736,6 +1081,7 @@ internal static class LostGripFallSelfTest
             metrics.MinimumVisualMargin = Math.Min(
                 metrics.MinimumVisualMargin,
                 drawableMargins.Screen);
+            visualCenter = drawableMargins.Center;
             if (drawableMargins.Screen < -0.001f)
             {
                 metrics.VisualBoundaryViolations++;
@@ -749,9 +1095,10 @@ internal static class LostGripFallSelfTest
         {
             metrics.NonFiniteSamples++;
         }
+        return visualCenter;
     }
 
-    private static (float Canvas, float Screen) MeasureDrawableMargins(
+    private static (float Canvas, float Screen, Vector2 Center) MeasureDrawableMargins(
         LizardProfile profile,
         FloatRect workArea,
         Vector2 hostCenter,
@@ -766,6 +1113,8 @@ internal static class LostGripFallSelfTest
             rendering.ShadowOffsetY);
         var minimumCanvasMargin = float.PositiveInfinity;
         var minimumScreenMargin = float.PositiveInfinity;
+        var minimumModel = new Vector2(float.PositiveInfinity);
+        var maximumModel = new Vector2(float.NegativeInfinity);
 
         foreach (var point in frame.BodyOutline)
         {
@@ -806,13 +1155,21 @@ internal static class LostGripFallSelfTest
 
         return (
             minimumCanvasMargin - DrawableRasterMargin,
-            minimumScreenMargin - DrawableRasterMargin * scale);
+            minimumScreenMargin - DrawableRasterMargin * scale,
+            hostCenter +
+            ((minimumModel + maximumModel) * 0.5f - new Vector2(canvasCenter)) * scale);
 
         void Include(Vector2 modelPoint, float modelRadius)
         {
             var screenPoint = hostCenter +
                               (modelPoint - new Vector2(canvasCenter)) * scale;
             var radius = modelRadius * scale;
+            minimumModel = Vector2.Min(
+                minimumModel,
+                modelPoint - new Vector2(modelRadius));
+            maximumModel = Vector2.Max(
+                maximumModel,
+                modelPoint + new Vector2(modelRadius));
             minimumCanvasMargin = Math.Min(
                 minimumCanvasMargin,
                 Math.Min(
@@ -961,6 +1318,7 @@ internal static class LostGripFallSelfTest
         float.IsFinite(behavior.Heading) &&
         float.IsFinite(behavior.Speed) &&
         float.IsFinite(behavior.LostGripFallProgress) &&
+        float.IsFinite(behavior.LostGripReachProgress) &&
         float.IsFinite(behavior.LostGripRegripProgress) &&
         float.IsFinite(behavior.LostGripVerticalVelocity) &&
         float.IsFinite(behavior.LostGripDistance) &&
@@ -970,6 +1328,11 @@ internal static class LostGripFallSelfTest
         float.IsFinite(lizard.FreeFallReferenceCorrectionTotal) &&
         float.IsFinite(lizard.FreeFallReferenceCorrectionMaximum) &&
         float.IsFinite(lizard.FreeFallReferenceCenterError) &&
+        float.IsFinite(lizard.RegripReachProgress) &&
+        IsFinite(lizard.RegripFrontContactTarget0) &&
+        IsFinite(lizard.RegripFrontContactTarget1) &&
+        float.IsFinite(lizard.RegripContactError) &&
+        float.IsFinite(lizard.RegripContactSpineDrift) &&
         lizard.Spine.Joints.All(IsFinite) &&
         lizard.Legs.All(leg => IsFinite(leg.Elbow) && IsFinite(leg.Foot));
 
@@ -1000,6 +1363,26 @@ internal static class LostGripFallSelfTest
             .AddMetric("maximum_reference_correction_total", value.MaximumReferenceCorrectionTotal, "model px")
             .AddMetric("maximum_reference_correction", value.MaximumReferenceCorrection, "model px")
             .AddMetric("maximum_reference_center_error", value.MaximumReferenceCenterError, "model px")
+            .AddMetric("reach_seeking_entries", value.ReachSeekingEntries)
+            .AddMetric("contact_hold_entries", value.ContactHoldEntries)
+            .AddMetric("reach_ordering_violations", value.ReachOrderingViolations)
+            .AddMetric("reach_direction_violations", value.ReachDirectionViolations)
+            .AddMetric("contact_stop_violations", value.ContactStopViolations)
+            .AddMetric("minimum_nonzero_seeking_steps", value.MinimumNonZeroSeekingSteps)
+            .AddMetric("minimum_behavior_reach_peak", value.MinimumBehaviorReachPeak)
+            .AddMetric("minimum_reach_target_error_reduction", value.MinimumReachTargetErrorReduction, "model px")
+            .AddMetric("minimum_front_foot_upward_travel", value.MinimumFrontFootUpwardTravel, "model px")
+            .AddMetric("minimum_front_paw_catch_direction_travel", value.MinimumFrontPawCatchDirectionTravel, "model px")
+            .AddMetric("maximum_reach_entry_pose_jump", value.MaximumReachEntryPoseJump, "model px")
+            .AddMetric("maximum_terminal_reach_error", value.MaximumTerminalReachError, "model px")
+            .AddMetric("maximum_contact_error", value.MaximumContactError, "model px")
+            .AddMetric("maximum_contact_spine_drift", value.MaximumContactSpineDrift, "model px")
+            .AddMetric("maximum_post_contact_window_drift", value.MaximumPostContactWindowDrift, "screen px")
+            .AddMetric("maximum_post_contact_visual_centroid_drift", value.MaximumPostContactVisualCentroidDrift, "screen px")
+            .AddMetric("real_grab_maximum_error", value.RealGrabMaximumError, "model px")
+            .AddMetric("maximum_safety_loss_pose_jump", value.MaximumSafetyLossPoseJump, "model px")
+            .AddMetric("minimum_safety_loss_boundary_margin", value.MinimumSafetyLossBoundaryMargin, "screen px")
+            .AddMetric("safety_loss_fake_contact_samples", value.SafetyLossFakeContactSamples)
             .AddMetric("minimum_canvas_margin", value.MinimumCanvasMargin, "model px")
             .AddMetric("minimum_visual_margin", value.MinimumVisualMargin, "screen px")
             .AddMetric("screen_heights_covered", value.ScreenHeightsCovered)
@@ -1076,6 +1459,50 @@ internal static class LostGripFallSelfTest
                 $"{value.MaximumCatchCentroidError:F3}/" +
                 $"{value.MaximumRegripCentroidDrift:F3}")
             .AddCheck(
+                "pre-contact reach coverage and ordering",
+                value.ReachSeekingEntries == ExpectedScenarioCount &&
+                value.ContactHoldEntries == ExpectedScenarioCount &&
+                value.ReachOrderingViolations == 0 &&
+                value.MinimumNonZeroSeekingSteps >= 2 &&
+                value.MinimumBehaviorReachPeak > 0f,
+                $"{ExpectedScenarioCount} Seeking/ContactHold; >= 2 nonzero steps; 0 ordering violations",
+                $"{value.ReachSeekingEntries}/{value.ContactHoldEntries}; " +
+                $"steps {value.MinimumNonZeroSeekingSteps}; " +
+                $"peak {value.MinimumBehaviorReachPeak:F3}; " +
+                $"violations {value.ReachOrderingViolations}")
+            .AddCheck(
+                "front paws reach upward toward catch targets",
+                value.ReachDirectionViolations == 0 &&
+                value.MinimumReachTargetErrorReduction > 1f &&
+                value.MinimumFrontFootUpwardTravel > 1f &&
+                value.MinimumFrontPawCatchDirectionTravel > 1f,
+                "both front paws reduce target error, move upward, and advance toward the catch point by > 1 model px",
+                $"reduction {value.MinimumReachTargetErrorReduction:F2}; " +
+                $"up {value.MinimumFrontFootUpwardTravel:F2}; " +
+                $"toward {value.MinimumFrontPawCatchDirectionTravel:F2}; " +
+                $"violations {value.ReachDirectionViolations}")
+            .AddCheck(
+                "contact occurs before the stationary hold",
+                value.ContactStopViolations == 0 &&
+                value.MaximumTerminalReachError <= 0.25f &&
+                value.MaximumContactError <= 0.25f,
+                "final moving Seeking frame contacts both paws; next stationary frame holds them",
+                $"violations {value.ContactStopViolations}; " +
+                $"errors {value.MaximumTerminalReachError:F3}/{value.MaximumContactError:F3}")
+            .AddCheck(
+                "reach and contact pose continuity",
+                value.MaximumReachEntryPoseJump <= 3f &&
+                value.MaximumContactSpineDrift <= 0.01f,
+                "Seeking entry jump <= 3 model px; contact spine drift <= 0.01 model px",
+                $"{value.MaximumReachEntryPoseJump:F3}/{value.MaximumContactSpineDrift:F4}")
+            .AddCheck(
+                "post-contact host and visual stability",
+                value.MaximumPostContactWindowDrift <= 0.001f &&
+                value.MaximumPostContactVisualCentroidDrift <= 12f,
+                "window <= 0.001 screen px; visual AABB centroid <= 12 screen px",
+                $"{value.MaximumPostContactWindowDrift:F4}/" +
+                $"{value.MaximumPostContactVisualCentroidDrift:F3}")
+            .AddCheck(
                 "free-fall reference-frame safety",
                 value.MaximumContainmentCorrectionTotal <= 0.01f &&
                 value.MaximumContainmentCorrection <= 0.01f &&
@@ -1107,6 +1534,28 @@ internal static class LostGripFallSelfTest
             .AddCheck("monotonic downward motion", value.MonotonicityViolations == 0, "0 violations", value.MonotonicityViolations.ToString())
             .AddCheck("pointer cannot steal fall", value.PointerPriorityPassed, "true", value.PointerPriorityPassed.ToString())
             .AddCheck("real grab pre-empts fall", value.GrabPriorityPassed, "true", value.GrabPriorityPassed.ToString())
+            .AddCheck(
+                "catch input is isolated from non-free-fall poses",
+                value.NonFreeFallInputIsolationPassed,
+                "true",
+                value.NonFreeFallInputIsolationPassed.ToString())
+            .AddCheck(
+                "real mouse grab remains isolated and constrained",
+                value.RealGrabAnimationIsolationPassed &&
+                value.RealGrabMaximumError <= LizardConfiguration.Default.Physics.MaximumGrabError + 0.001f,
+                "auto-regrip phase None; grab error within configured limit",
+                $"{value.RealGrabAnimationIsolationPassed}; {value.RealGrabMaximumError:F3}")
+            .AddCheck(
+                "mid-seeking safety loss degrades without a fake catch",
+                value.MidSeekingSafetyLossFallbackPassed &&
+                value.MaximumSafetyLossPoseJump <= 3f &&
+                value.MinimumSafetyLossBoundaryMargin >= -0.001f &&
+                value.SafetyLossFakeContactSamples == 0,
+                "SafetyForced keeps the final moving frame partial, then uses continuous non-contact recovery",
+                $"passed {value.MidSeekingSafetyLossFallbackPassed}; " +
+                $"local-pose jump {value.MaximumSafetyLossPoseJump:F3}; " +
+                $"margin {value.MinimumSafetyLossBoundaryMargin:F2}px; " +
+                $"fake contacts {value.SafetyLossFakeContactSamples}")
             .AddCheck("pause pre-empts fall", value.PausePriorityPassed, "true", value.PausePriorityPassed.ToString())
             .AddCheck("finite behavior and pose", value.NonFiniteSamples == 0, "0", value.NonFiniteSamples.ToString())
             .AddCheck("Chinese debug labels", value.DebugChineseLabelsPassed, "true", value.DebugChineseLabelsPassed.ToString())
@@ -1118,6 +1567,20 @@ internal static class LostGripFallSelfTest
         FloatRect NavigationArea,
         float FullRenderRadius,
         LostGripSafetyContext LostGripSafety);
+
+    private readonly record struct SafetyLossFallbackResult(
+        bool Passed,
+        float MaximumPoseJump,
+        float MinimumBoundaryMargin,
+        int FakeContactSamples)
+    {
+        public static SafetyLossFallbackResult Failed => new(
+            false,
+            float.PositiveInfinity,
+            float.NegativeInfinity,
+            0);
+    }
+
 
     private sealed class Metrics
     {
@@ -1139,6 +1602,22 @@ internal static class LostGripFallSelfTest
         public float MaximumReferenceCorrectionTotal;
         public float MaximumReferenceCorrection;
         public float MaximumReferenceCenterError;
+        public int ReachSeekingEntries;
+        public int ContactHoldEntries;
+        public int ReachOrderingViolations;
+        public int ReachDirectionViolations;
+        public int ContactStopViolations;
+        public int MinimumNonZeroSeekingSteps = int.MaxValue;
+        public float MinimumBehaviorReachPeak = float.PositiveInfinity;
+        public float MinimumReachTargetErrorReduction = float.PositiveInfinity;
+        public float MinimumFrontFootUpwardTravel = float.PositiveInfinity;
+        public float MinimumFrontPawCatchDirectionTravel = float.PositiveInfinity;
+        public float MaximumReachEntryPoseJump;
+        public float MaximumTerminalReachError;
+        public float MaximumContactError;
+        public float MaximumContactSpineDrift;
+        public float MaximumPostContactWindowDrift;
+        public float MaximumPostContactVisualCentroidDrift;
         public float MinimumCanvasMargin = float.PositiveInfinity;
         public float MinimumVisualMargin = float.PositiveInfinity;
         public float MinimumAvailableDistance = float.PositiveInfinity;
@@ -1158,6 +1637,79 @@ internal static class LostGripFallSelfTest
         public HashSet<int> Seeds { get; } = [];
         public HashSet<int> StartBands { get; } = [];
         public HashSet<int> LongFallScreenHeights { get; } = [];
+
+        public void RecordReach(LostGripRegripProbeResult result)
+        {
+            ReachSeekingEntries += result.SeekingSeen ? 1 : 0;
+            ContactHoldEntries += result.ContactHoldSeen ? 1 : 0;
+            ReachOrderingViolations += result.OrderingViolations;
+            ReachDirectionViolations += result.DirectionViolations;
+            ContactStopViolations += result.ContactStopViolations;
+            if (result.SeekingSeen)
+            {
+                MinimumNonZeroSeekingSteps = Math.Min(
+                    MinimumNonZeroSeekingSteps,
+                    result.NonZeroSeekingSteps);
+                MinimumBehaviorReachPeak = Math.Min(
+                    MinimumBehaviorReachPeak,
+                    result.BehaviorReachPeak);
+                MinimumReachTargetErrorReduction = Math.Min(
+                    MinimumReachTargetErrorReduction,
+                    result.TargetErrorReduction);
+                MinimumFrontFootUpwardTravel = Math.Min(
+                    MinimumFrontFootUpwardTravel,
+                    result.FrontFootUpwardTravel);
+                MinimumFrontPawCatchDirectionTravel = Math.Min(
+                    MinimumFrontPawCatchDirectionTravel,
+                    result.FrontPawCatchDirectionTravel);
+            }
+            if (!result.TerminalReachSeen)
+            {
+                ReachOrderingViolations++;
+            }
+            MaximumReachEntryPoseJump = Math.Max(
+                MaximumReachEntryPoseJump,
+                result.ReachEntryPoseJump);
+            MaximumTerminalReachError = Math.Max(
+                MaximumTerminalReachError,
+                result.TerminalReachError);
+            MaximumContactError = Math.Max(
+                MaximumContactError,
+                result.ContactError);
+            MaximumContactSpineDrift = Math.Max(
+                MaximumContactSpineDrift,
+                result.ContactSpineDrift);
+            MaximumPostContactWindowDrift = Math.Max(
+                MaximumPostContactWindowDrift,
+                result.PostContactWindowDrift);
+            MaximumPostContactVisualCentroidDrift = Math.Max(
+                MaximumPostContactVisualCentroidDrift,
+                result.PostContactVisualCentroidDrift);
+        }
+
+        public void NormalizeReachMinimums()
+        {
+            if (MinimumNonZeroSeekingSteps == int.MaxValue)
+            {
+                MinimumNonZeroSeekingSteps = 0;
+            }
+            if (!float.IsFinite(MinimumBehaviorReachPeak))
+            {
+                MinimumBehaviorReachPeak = 0f;
+            }
+            if (!float.IsFinite(MinimumReachTargetErrorReduction))
+            {
+                MinimumReachTargetErrorReduction = 0f;
+            }
+            if (!float.IsFinite(MinimumFrontFootUpwardTravel))
+            {
+                MinimumFrontFootUpwardTravel = 0f;
+            }
+            if (!float.IsFinite(MinimumFrontPawCatchDirectionTravel))
+            {
+                MinimumFrontPawCatchDirectionTravel = 0f;
+            }
+        }
     }
 
     private sealed record PoseSnapshot(

@@ -121,7 +121,7 @@ sequenceDiagram
 
 随机行为必须保持 `Random.NextDouble()` 的调用次数与顺序。纯策略函数应接收已经生成的 sample，不能在模块内部偷偷增加随机抽样。
 
-`LostGripFall` 是一个显式 FSM 状态，内部只有 `Falling` 与 `Regripping` 两个阶段。五种爬行态可通过 `Choice` 进入，完成后通过 `FallComplete` 进入短暂 `Idle`，再恢复正常自主爬行。真实鼠标抓取和暂停拥有更高优先级；追鼠不能抢占下坠。入口只抽样一次目标距离，下界为配置的 `MinimumDistance`，上界为当前位置到完整渲染安全底边的全部可用距离，不设置固定最大值。若底边可用距离不足最小值，当前位置不能满足左、右、上方的完整渲染安全留白，或物理工作区无法完整应用四边留白，入口直接交给 `EdgeTurn`，不允许依靠位置 Clamp 或收缩安全间距掩盖越界。
+`LostGripFall` 是一个显式 FSM 状态，内部只有 `Falling` 与 `Regripping` 两个阶段。五种爬行态可通过 `Choice` 进入，完成后通过 `FallComplete` 进入短暂 `Idle`，再恢复正常自主爬行。真实鼠标抓取和暂停拥有更高优先级；追鼠不能抢占下坠。入口只抽样一次目标距离，下界为配置的 `MinimumDistance`，上界为当前位置到完整渲染安全底边的全部可用距离，不设置固定最大值。`LostGripReachProgress` 在最后 `ReachLeadDistance` 内从 0 增长到 1，但 FSM 仍保持下坠；只有 `LostGripCatchReason.ReachedTarget` 才允许 application seam 在最终移动子步锁存完整伸手输入，下一静止子步进入接触保持。`SafetyForced` 表示动态安全区失效：带位移帧仍以 `FreeFall` 消费位移但沿用更新前的部分进度，随后未完成 IK 的 `Regrip` 必须跳过假接触并走连续释放恢复。配置层要求最短下坠和伸手前导距离在最大落速下都至少覆盖三个固定模拟子步。若底边可用距离不足最小值，当前位置不能满足左、右、上方的完整渲染安全留白，或物理工作区无法完整应用四边留白，入口直接交给 `EdgeTurn`，不允许依靠位置 Clamp 或收缩安全间距掩盖越界。
 
 ## 配置与个体层
 
@@ -146,12 +146,12 @@ flowchart LR
 
 动画层维护模型空间中的脊柱、腿、足端和次级动作：
 
-- `LizardAnimationInput` 把完整行为状态收敛为 `Rest / Observe / Locomotion / FastSCurve / Grabbed / FreeFall / Regrip / ReleaseSettle` 八种表现语义。
+- `LizardAnimationInput` 把完整行为状态收敛为 `Rest / Observe / Locomotion / FastSCurve / Grabbed / FreeFall / Regrip / ReleaseSettle` 八种表现语义；`CatchPreparationProgress` 只在 `FreeFall` 生效，非下坠姿态必须视为 0。
 - `LegRig` 独立负责一条腿的两段 IK、步进曲线、reach 保护和诊断计数。
 - `DiagonalGaitController` 负责对角组交替、落点误差记忆和全足支撑锁。
 - `SecondaryMotionController` 负责呼吸、尾摆、身体起伏和眨眼。
-- `ProceduralLizard` 只编排脊柱、步态、悬挂/释放姿态并输出只读 `LizardRenderFrame`。
-- `DanglingRig2D` 只管理抓取、无 Pin 的自由落体、积分、回滚与释放生命周期；`DanglingTopology2D`、`DanglingConstraintSolver2D`、`DanglingPoseValidator`、`ParticleSolver2D` 和 `GrabBinding2D` 分别拥有拓扑、约束、校验、粒子与材质抓点算法。`FreeFall` 与抓起悬挂共享粒子和骨长约束，但抓点误差必须保持为零；`Regrip` 退出粒子态并复用连续的恢复混合。
+- `ProceduralLizard` 只编排脊柱、步态、悬挂/释放姿态并输出只读 `LizardRenderFrame`；自动回抓以 `Behavior.LostGripFall.RegripDuration` 为总时钟，先按 `Physics.RegripContactHoldFraction` 保持接触，再把剩余区间归一化为姿态恢复。`ReleasePoseRecoveryDuration` 只属于真实鼠标释放路径。
+- `DanglingRig2D` 只管理抓取、无 Pin 的自由落体、积分、回滚与释放生命周期；`DanglingTopology2D`、`DanglingConstraintSolver2D`、`DanglingPoseValidator`、`ParticleSolver2D` 和 `GrabBinding2D` 分别拥有拓扑、约束、校验、粒子与材质抓点算法。`FreeFall` 与抓起悬挂共享粒子和骨长约束，但抓点误差必须保持为零；自由落体末段由两条前肢在移动参考系内先寻找抓点，接触保持发生后才退出粒子态，`Regrip` 再复用连续的恢复混合。真实鼠标 `Grabbed` 仍使用独立材质 Pin，不得复用或遗留自动回抓状态。
 
 `Core/Animation` 和 `ProceduralLizard` 不允许引用 `RoamingState`。新增行为状态时，只在 `PetSimulationSession` 的映射处决定其表现语义。
 
@@ -168,7 +168,7 @@ flowchart LR
 - `ConfigurationSelfTest`
 - `LostGripFallSelfTest`
 
-其中不得通过放宽以下约束来掩盖回归：对角组违规、植足漂移、reach 投影、目标夹紧、摆动夹紧、非法状态转移、非有限值、完整渲染窗口越界或重新抓稳首帧跳变。`LostGripFallSelfTest` 使用四行权重均为 100% 的测试 Profile 确定性触发状态，不依赖生产矩阵中 2% 的随机命中；它在 3 种屏幕高度、4 个起始 Y 区间和 36 个 seed 上验证目标落在 `[MinimumDistance, 实际安全底边可用距离]`、同 seed 会随可用高度产生更长下坠、旧固定上限不再封顶、实际可绘制 AABB/完整 HWND 四边零越界、极小工作区拒绝、有限值以及落体与重抓连续性。可通过 `--lost-grip-test=<报告路径>` 单独运行。
+其中不得通过放宽以下约束来掩盖回归：对角组违规、植足漂移、reach 投影、目标夹紧、摆动夹紧、非法状态转移、非有限值、完整渲染窗口越界或重新抓稳首帧跳变。`LostGripFallSelfTest` 使用四行权重均为 100% 的测试 Profile 确定性触发状态，不依赖生产矩阵中 2% 的随机命中；它在 3 种屏幕高度、4 个起始 Y 区间和 36 个 seed 上验证目标落在 `[MinimumDistance, 实际安全底边可用距离]`、同 seed 会随可用高度产生更长下坠、旧固定上限不再封顶、前肢在仍下坠时向抓点伸展、接触帧才停止、接触后窗口与视觉质心稳定、伸手中途安全区失效时不伪造 ContactHold、真实鼠标 Grab 隔离、实际可绘制 AABB/完整 HWND 四边零越界、极小工作区拒绝、有限值以及落体与重抓连续性。可通过 `--lost-grip-test=<报告路径>` 单独运行。
 
 ## 扩展约束
 

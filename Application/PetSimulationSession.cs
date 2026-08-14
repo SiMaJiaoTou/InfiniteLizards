@@ -107,6 +107,7 @@ internal sealed class PetSimulationSession
             (step, stepsRemaining) =>
         {
             var previousLostGripPhase = _behavior.LostGripPhase;
+            var previousLostGripReachProgress = _behavior.LostGripReachProgress;
             if (input.LostGripSafety is { } lostGripSafety)
             {
                 _behavior.Update(
@@ -138,19 +139,28 @@ internal sealed class PetSimulationSession
                 _lastModelScreenPosition = _behavior.Position;
             }
 
-            // The step that reaches the catch point still contains physical
-            // downward travel. Let the free-fall rig consume that final delta;
-            // regripping begins on the following fixed step with no pose pop.
+            // Any Falling -> Regripping step that still contains physical
+            // window travel must be consumed by the free-fall rig. A normal
+            // endpoint latches a complete reach; an emergency safety stop keeps
+            // the previous reach intent so it cannot fabricate contact while
+            // still preserving the particle rig's reference-frame continuity.
             var animationLostGripPhase =
                 previousLostGripPhase == LostGripFallPhase.Falling &&
                 _behavior.LostGripPhase == LostGripFallPhase.Regripping &&
                 screenDeltaModel.LengthSquared() > 0.000001f
                     ? LostGripFallPhase.Falling
                     : _behavior.LostGripPhase;
+            var completingCatchOnMovingStep =
+                previousLostGripPhase == LostGripFallPhase.Falling &&
+                _behavior.LostGripPhase == LostGripFallPhase.Regripping &&
+                animationLostGripPhase == LostGripFallPhase.Falling;
             var catchPreparationProgress =
                 animationLostGripPhase == LostGripFallPhase.Falling
-                    ? _behavior.LostGripPhase == LostGripFallPhase.Regripping
-                        ? 1f
+                    ? completingCatchOnMovingStep
+                        ? _behavior.LostGripCatchReason ==
+                          LostGripCatchReason.ReachedTarget
+                            ? 1f
+                            : previousLostGripReachProgress
                         : _behavior.LostGripReachProgress
                     : 0f;
             var animationInput = new LizardAnimationInput(

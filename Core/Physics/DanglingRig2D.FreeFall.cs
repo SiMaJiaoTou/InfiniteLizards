@@ -17,7 +17,8 @@ internal sealed partial class DanglingRig2D
     public void UpdateFreeFall(
         ProceduralLizard lizard,
         float dt,
-        Vector2 screenDelta)
+        Vector2 screenDelta,
+        float catchPreparationProgress)
     {
         if (!_active || _mode != SimulationMode.FreeFall)
         {
@@ -46,6 +47,7 @@ internal sealed partial class DanglingRig2D
                 lowerIterationBlend);
         }
 
+        ApplyCatchPreparation(lizard, catchPreparationProgress);
         UpdateParticleVelocities(dt);
         StabilizeFreeFallReferenceFrame();
         if (!IsValid(lizard))
@@ -59,6 +61,180 @@ internal sealed partial class DanglingRig2D
         }
 
         ApplyTo(lizard);
+    }
+
+    /// <summary>
+    /// During the last part of a fall, guide the two front paws toward stable
+    /// points above the body. The endpoints are authored inside the particle
+    /// rig so the final falling pose becomes the first stationary contact pose
+    /// without a render-only correction or a synthetic mouse pin.
+    /// </summary>
+    private void ApplyCatchPreparation(
+        ProceduralLizard lizard,
+        float catchPreparationProgress)
+    {
+        var inputProgress = float.IsFinite(catchPreparationProgress)
+            ? MathEx.Clamp01(catchPreparationProgress)
+            : 0f;
+        if (inputProgress <= 0f)
+        {
+            FreeFallReachProgress = 0f;
+            FreeFallReachTargetError = 0f;
+            return;
+        }
+
+        var capturedThisStep = !_freeFallReachCaptured;
+        if (capturedThisStep)
+        {
+            CaptureFreeFallReach(lizard, inputProgress);
+        }
+
+        if (capturedThisStep && inputProgress >= 1f)
+        {
+            FreeFallReachProgress = 1f;
+            UpdateFreeFallReachError();
+            return;
+        }
+
+        // Capture the first signalled pose exactly. Progress is then remapped
+        // over the remaining lead interval so entering Seeking cannot pop a
+        // paw, while the final moving frame still reaches the contact points.
+        var progressSpan = 1f - _freeFallReachCaptureInputProgress;
+        FreeFallReachProgress = progressSpan > 0.0001f
+            ? MathEx.Clamp01(
+                (inputProgress - _freeFallReachCaptureInputProgress) /
+                progressSpan)
+            : inputProgress >= 1f
+                ? 1f
+                : 0f;
+        if (FreeFallReachProgress <= 0f)
+        {
+            UpdateFreeFallReachError();
+            return;
+        }
+
+        var pathProgress = SmoothStep(FreeFallReachProgress);
+        for (var legIndex = 0; legIndex < 2; legIndex++)
+        {
+            var bodyIndex = DanglingTopology2D.GetBodyIndex(legIndex);
+            var shoulder = GetShoulderPosition(lizard, legIndex, bodyIndex);
+            var desiredFoot = Vector2.Lerp(
+                _freeFallReachStartFeet[legIndex],
+                _freeFallReachTargets[legIndex],
+                pathProgress);
+            var foot = ConstrainReachFoot(shoulder, desiredFoot, legIndex);
+            var elbow = SolveReachElbow(
+                shoulder,
+                foot,
+                legIndex,
+                _freeFallReachBendSigns[legIndex]);
+            _feet[legIndex].Position = foot;
+            _elbows[legIndex].Position = elbow;
+        }
+        UpdateFreeFallReachError();
+    }
+
+    private void CaptureFreeFallReach(
+        ProceduralLizard lizard,
+        float inputProgress)
+    {
+        _freeFallReachCaptured = true;
+        _freeFallReachCaptureInputProgress = inputProgress;
+        FreeFallReachProgress = 0f;
+
+        for (var legIndex = 0; legIndex < 2; legIndex++)
+        {
+            var bodyIndex = DanglingTopology2D.GetBodyIndex(legIndex);
+            var shoulder = GetShoulderPosition(lizard, legIndex, bodyIndex);
+            var elbow = _elbows[legIndex].Position;
+            var foot = _feet[legIndex].Position;
+            _freeFallReachStartFeet[legIndex] = foot;
+
+            var side = DanglingTopology2D.GetSide(legIndex);
+            var outwardWeight = _configuration.RegripFrontReachOutwardWeight;
+            var reachDirection = MathEx.SafeNormalize(
+                new Vector2(side * outwardWeight, -(1f - outwardWeight)),
+                -Vector2.UnitY);
+            var reachLength =
+                (_upperLegLengths[legIndex] + _lowerLegLengths[legIndex]) *
+                _configuration.RegripFrontReachLengthFactor;
+            // A user-configured lead can be shorter than one fixed step. In
+            // that degenerate case there is no time interval in which an
+            // upward reach can be animated without violating continuity.
+            // Treat the already visible paw as the contact point: this keeps
+            // the stop physically continuous and degrades only anticipation.
+            _freeFallReachTargets[legIndex] = inputProgress >= 1f
+                ? foot
+                : shoulder + reachDirection * reachLength;
+
+            var shoulderToFoot = MathEx.SafeNormalize(
+                foot - shoulder,
+                reachDirection);
+            var bendSide = Vector2.Dot(
+                elbow - shoulder,
+                MathEx.Perpendicular(shoulderToFoot));
+            _freeFallReachBendSigns[legIndex] = MathF.Abs(bendSide) > 0.0001f
+                ? MathF.Sign(bendSide)
+                : side;
+        }
+        UpdateFreeFallReachError();
+    }
+
+    private Vector2 ConstrainReachFoot(
+        Vector2 shoulder,
+        Vector2 desiredFoot,
+        int legIndex)
+    {
+        var upperLength = _upperLegLengths[legIndex];
+        var lowerLength = _lowerLegLengths[legIndex];
+        var minimumDistance = MathF.Abs(upperLength - lowerLength) + 0.001f;
+        var maximumDistance = upperLength + lowerLength - 0.001f;
+        var fromShoulder = desiredFoot - shoulder;
+        var direction = MathEx.SafeNormalize(fromShoulder, -Vector2.UnitY);
+        var distance = Math.Clamp(
+            fromShoulder.Length(),
+            minimumDistance,
+            Math.Max(minimumDistance, maximumDistance));
+        return shoulder + direction * distance;
+    }
+
+    private Vector2 SolveReachElbow(
+        Vector2 shoulder,
+        Vector2 foot,
+        int legIndex,
+        float bendSign)
+    {
+        var upperLength = _upperLegLengths[legIndex];
+        var lowerLength = _lowerLegLengths[legIndex];
+        var shoulderToFoot = foot - shoulder;
+        var distance = Math.Max(0.0001f, shoulderToFoot.Length());
+        var direction = shoulderToFoot / distance;
+        var along = Math.Clamp(
+            (upperLength * upperLength - lowerLength * lowerLength +
+             distance * distance) /
+            (2f * distance),
+            0f,
+            upperLength);
+        var perpendicularDistance = MathF.Sqrt(Math.Max(
+            0f,
+            upperLength * upperLength - along * along));
+        return shoulder +
+               direction * along +
+               MathEx.Perpendicular(direction) *
+               (perpendicularDistance * bendSign);
+    }
+
+    private void UpdateFreeFallReachError()
+    {
+        if (!_freeFallReachCaptured)
+        {
+            FreeFallReachTargetError = 0f;
+            return;
+        }
+
+        FreeFallReachTargetError = Math.Max(
+            Vector2.Distance(_feet[0].Position, _freeFallReachTargets[0]),
+            Vector2.Distance(_feet[1].Position, _freeFallReachTargets[1]));
     }
 
     /// <summary>
@@ -118,6 +294,32 @@ internal sealed partial class DanglingRig2D
             ParticleSolver2D.Translate(ref _elbows[index], correction);
             ParticleSolver2D.Translate(ref _feet[index], correction);
         }
+        TranslateFreeFallReachFrame(correction);
+    }
+
+    private void TranslateFreeFallReachFrame(Vector2 correction)
+    {
+        if (!_freeFallReachCaptured)
+        {
+            return;
+        }
+
+        for (var index = 0; index < 2; index++)
+        {
+            _freeFallReachStartFeet[index] += correction;
+            _freeFallReachTargets[index] += correction;
+        }
+    }
+
+    private void ResetFreeFallReach()
+    {
+        _freeFallReachCaptured = false;
+        _freeFallReachCaptureInputProgress = 0f;
+        FreeFallReachProgress = 0f;
+        FreeFallReachTargetError = 0f;
+        Array.Clear(_freeFallReachStartFeet);
+        Array.Clear(_freeFallReachTargets);
+        Array.Clear(_freeFallReachBendSigns);
     }
 
     private static void RemoveCommonVelocity(
@@ -158,5 +360,6 @@ internal sealed partial class DanglingRig2D
             _feet[i] = ParticleSolver2D.Create(_lastValidFeet[i]);
         }
         GrabConstraintError = 0f;
+        UpdateFreeFallReachError();
     }
 }

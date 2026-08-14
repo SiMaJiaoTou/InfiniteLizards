@@ -28,7 +28,6 @@ internal sealed partial class DanglingRig2D
     private readonly Vector2[] _lastValidSpine;
     private readonly Vector2[] _lastValidElbows = new Vector2[LegCount];
     private readonly Vector2[] _lastValidFeet = new Vector2[LegCount];
-    private readonly Vector2[] _freeFallReachStartElbows = new Vector2[2];
     private readonly Vector2[] _freeFallReachStartFeet = new Vector2[2];
     private readonly Vector2[] _freeFallReachTargets = new Vector2[2];
     private readonly float[] _freeFallReachBendSigns = new float[2];

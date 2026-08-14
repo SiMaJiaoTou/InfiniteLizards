@@ -104,11 +104,11 @@ internal sealed class DebugPanelView : FrameworkElement
         var sCurve = behavior.State.IsSCurveCrawl()
             ? $"段{cycleIndex}/{behavior.SCurveCycleCount}  周{behavior.SCurveCycleDuration:F1}s  半径≈{estimatedRadius:F0}px"
             : "未激活";
-        var lostGrip = behavior.State == RoamingState.LostGripFall
-            ? $"{LostGripPhaseLabel(behavior.LostGripPhase)}  " +
-              $"速度{behavior.LostGripVerticalVelocity:F0}  " +
-              $"距离{behavior.LostGripDistance:F0}/{behavior.LostGripTargetDistance:F0}px"
-            : "未触发";
+        var lostGripProgress = LostGripProgressLabel(
+            behavior.LostGripPhase,
+            behavior.LostGripCatchReason,
+            behavior.LostGripReachProgress,
+            behavior.LostGripRegripProgress);
         // The lower half is reserved for state buttons. Keep this text layer
         // focused on the state machine rather than repeating every joint value.
         var left = new StringBuilder(160);
@@ -118,11 +118,18 @@ internal sealed class DebugPanelView : FrameworkElement
         left.Append($"速度  {behavior.Speed:F1} → {behavior.DesiredSpeed:F1}");
 
         var right = new StringBuilder(160);
-        right.AppendLine($"转向  {behavior.TurnVelocity:F2} → {behavior.DesiredTurnVelocity:F2}");
-        right.AppendLine($"鼠标  {pointerStatus}  {pointerDistance}");
-        right.AppendLine(behavior.State == RoamingState.LostGripFall
-            ? $"失手  {lostGrip}"
-            : $"S弯   {sCurve}");
+        if (behavior.State == RoamingState.LostGripFall)
+        {
+            right.AppendLine($"阶段  {LostGripPhaseLabel(behavior.LostGripPhase)}");
+            right.AppendLine($"{lostGripProgress}  v{behavior.LostGripVerticalVelocity:F0}");
+            right.AppendLine($"下坠  {behavior.LostGripDistance:F0}/{behavior.LostGripTargetDistance:F0}px");
+        }
+        else
+        {
+            right.AppendLine($"转向  {behavior.TurnVelocity:F2} → {behavior.DesiredTurnVelocity:F2}");
+            right.AppendLine($"鼠标  {pointerStatus}  {pointerDistance}");
+            right.AppendLine($"S弯   {sCurve}");
+        }
         right.Append($"步态  {lizard.LastGaitDisplaySpeed:F1}  P{lizard.NextPair}  帧率{frame.FramesPerSecond:F0}");
 
         var fontSize = 13d / Math.Max(1f, frame.DpiScale);
@@ -159,8 +166,28 @@ internal sealed class DebugPanelView : FrameworkElement
     internal static string LostGripPhaseLabel(LostGripFallPhase phase) =>
         DebugLabelCatalog.LostGripPhase(phase);
 
+    internal static string LostGripProgressLabel(
+        LostGripFallPhase phase,
+        LostGripCatchReason catchReason,
+        float reachProgress,
+        float regripProgress) => phase switch
+        {
+            LostGripFallPhase.Falling =>
+                $"伸手{FormatPercent(reachProgress)}",
+            LostGripFallPhase.Regripping
+                when catchReason == LostGripCatchReason.SafetyForced =>
+                $"安全恢复{FormatPercent(regripProgress)}",
+            LostGripFallPhase.Regripping =>
+                $"抓稳{FormatPercent(regripProgress)}",
+            _ => "等待"
+        };
+
     private static string ReasonLabel(StateTransitionReason reason) =>
         DebugLabelCatalog.Reason(reason);
+
+    private static string FormatPercent(float value) =>
+        (MathEx.Clamp01(float.IsFinite(value) ? value : 0f) * 100f)
+        .ToString("F0", CultureInfo.InvariantCulture) + "%";
 
     private static SolidColorBrush FrozenBrush(Color color)
     {

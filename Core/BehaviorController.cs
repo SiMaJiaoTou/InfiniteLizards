@@ -84,6 +84,7 @@ internal sealed partial class BehaviorController
         }
     }
     public float LostGripRegripProgress => _lostGripRegripProgress;
+    public LostGripCatchReason LostGripCatchReason { get; private set; }
     public float LostGripVerticalVelocity => _lostGripVerticalVelocity;
     public float LostGripDistance => _lostGripDistance;
     public float LostGripTargetDistance => _lostGripTargetDistance;

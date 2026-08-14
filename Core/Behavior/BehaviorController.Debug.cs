@@ -35,6 +35,7 @@ internal sealed partial class BehaviorController
             Emotion,
             DropProgress,
             LostGripPhase,
+            LostGripCatchReason,
             LostGripFallProgress,
             LostGripReachProgress,
             LostGripRegripProgress,
