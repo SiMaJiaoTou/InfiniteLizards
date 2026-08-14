@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <AssemblyName>DesktopLizard</AssemblyName>
+    <RootNamespace>DesktopLizard</RootNamespace>
+    <Version>1.0.0</Version>
+    <Authors>Desktop Lizard</Authors>
+    <Product>桌面小蜥</Product>
+    <Description>一只会自主漫游、追逐鼠标，并在抓起时呈现重力悬挂与释放冲刺的程序化四足桌面宠物。</Description>
+    <InvariantGlobalization>false</InvariantGlobalization>
+    <PublishSingleFile>true</PublishSingleFile>
+    <SelfContained>true</SelfContained>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+    <DebugType>none</DebugType>
+    <DebugSymbols>false</DebugSymbols>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- Generated diagnostics may contain their own temporary C# projects. -->
+    <Compile Remove="artifacts\**\*.cs" />
+  </ItemGroup>
+</Project>

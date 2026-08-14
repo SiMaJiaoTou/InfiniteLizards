@@ -1,0 +1,21 @@
+# Build outputs
+bin/
+obj/
+artifacts/
+
+# Generated previews and diagnostic reports
+preview-*/
+/*.txt
+
+# IDE and user-specific files
+.vs/
+.vscode/
+.idea/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+# Windows metadata
+Thumbs.db
+Desktop.ini
