@@ -1,177 +1,115 @@
-# DesktopLizard 架构说明
+# Infinite Lizards 架构
 
-本文档描述桌面蜥蜴的模块边界、运行时数据流和后续扩展约束。目标不是把每个状态拆成一个类，而是让行为策略、动画、应用编排、WPF 表现和 Windows 平台代码保持单向依赖。
+当前实现把“通用桌面宠物引擎”、“蜥蜴 gameplay”和“平台窗口/渲染”拆成独立项目。新的跨平台入口是 `src/InfiniteLizards.Desktop`；根目录的 `DesktopLizard.csproj` 仍是上游 WPF/Windows 入口，用于回归和迁移期对照。
 
-## 目录与职责
-
-```text
-DesktopLizard
-├─ Core
-│  ├─ Configuration            JSON 模型、校验、迁移和个体 Profile 解析
-│  ├─ Behavior                 状态图、自治策略、追鼠、边缘导航、S 弯和失手下坠控制
-│  ├─ Animation                动画输入、对角步态、单腿 IK、次级动作和渲染快照
-│  ├─ Physics                  悬挂拓扑、粒子约束、抓点材质绑定与姿态校验
-│  ├─ BehaviorController*      行为门面及按职责拆分的 partial 编排
-│  ├─ ProceduralLizard         程序化姿态门面
-│  ├─ DanglingRig2D            悬挂物理生命周期与姿态回写
-│  ├─ Chain                    通用链式骨架
-│  └─ MathEx                   无平台依赖的数学函数
-├─ Application
-│  ├─ FixedStepRunner          统一的 120 Hz 子步策略
-│  ├─ PetSimulationSession     Behavior → LizardAnimationInput 的唯一映射
-│  └─ DebugTelemetryCoordinator 世界遥测到只读调试帧的组装
-├─ Rendering
-│  ├─ LizardView               只消费 LizardRenderFrame 的 WPF 入口
-│  ├─ LizardGeometryBuilder    绘制与命中共用的轮廓构建
-│  ├─ DebugOverlayRenderer     关节、目标与路径调试层
-│  └─ DebugPanelView           中文关键遥测面板
-├─ Windows
-│  ├─ PetWindow                帧循环、生命周期和应用装配
-│  ├─ PetWindow.Interaction    抓放、菜单和用户命令
-│  ├─ PetWindow.Platform       HWND、DPI、穿透和显示器边界
-│  ├─ DebugPanelWindow         不遮挡蜥蜴的独立调试侧栏
-│  └─ NativeMethods            Win32/DPI/显示器边界
-├─ Diagnostics
-│  ├─ Framework                统一报告、场景 runner 与流式 probe
-│  ├─ DiagnosticCommandRunner  诊断 CLI 的统一入口与报告格式化
-│  ├─ *SelfTest                行为、步态、追鼠、抓放、活性回归
-│  └─ PreviewExporter          离屏动作预览
-├─ Services                    自启动等系统服务
-└─ App                         进程生命周期和 composition root
-```
-
-## 依赖方向
+## 物理分层
 
 ```mermaid
 flowchart LR
-    App --> Windows
-    Windows --> Application
-    Windows --> Rendering
-    App --> Configuration["Core.Configuration"]
-    Application --> Behavior["Core.Behavior"]
-    Application --> Animation["Core.Animation"]
-    Rendering --> Frame["LizardRenderFrame"]
-    Diagnostics --> Application
-    Diagnostics --> Behavior
-    Diagnostics --> Animation
-    Windows --> Platform["Win32 / WPF"]
+    Host["InfiniteLizards.Desktop<br/>Avalonia + Skia 宿主"] --> Runtime["DesktopPet.Engine<br/>DesktopPetRuntime + fixed step（默认 120 Hz）"]
+    Host --> Presenter["Desktop presenter/view<br/>不可变快照 → 共享几何"]
+    Host --> Native["Platform adapters<br/>Win32 / AppKit + Quartz"]
+    Runtime --> Port["IDesktopPetGame&lt;TSnapshot&gt;<br/>只接收 fixed-step input"]
+    Game["InfiniteLizards.Gameplay<br/>蜥蜴行为、动画、物理"] --> Port
+    Game --> EngineTypes["DesktopPet.Engine<br/>world/display 值对象"]
 ```
 
-必须遵守以下边界：
+| 项目 | 拥有的职责 | 禁止依赖 |
+|---|---|---|
+| `DesktopPet.Engine` | `DesktopPetRuntime<TSnapshot>`、`IDesktopPetGame<TSnapshot>`、固定步进、逐屏 96-DIP 映射、有状态坐标帧切换、窗口放置值对象与插件边界校验 | Avalonia、Win32/AppKit、蜥蜴状态机 |
+| `InfiniteLizards.Gameplay` | 配置/Profile、行为 FSM、步态/IK、悬挂物理，以不可变 `LizardRenderFrame` 输出 | 窗口、显示帧 delta、DPI、鼠标 API、平台 P/Invoke |
+| `InfiniteLizards.Desktop` | composition root、显示帧采样、全局指针、点击穿透、窗口放置、Avalonia/Skia presenter/view | 不得拥有 fixed-step 累积器，不得实现 gameplay 状态转移和动画公式 |
 
-1. `Core` 不引用 WPF、HWND、DPI 或鼠标 API。
-2. `Application` 负责把行为输出映射为动画输入；该映射不应再复制到窗口类。
-3. `Windows` 只采集平台输入并应用模拟输出，不实现行为或步态公式。
-4. `Rendering` 不修改行为状态；调试绘制不能进入命中几何。
-5. `Diagnostics` 复用生产 Session、轨迹函数和固定步进策略，不复制近似实现。
-6. 所有可调行为/动画/物理/外观参数只从已校验的 `LizardProfile` 注入；模型内部不读 JSON。
+`LizardGameModule` 是蜥蜴 gameplay 对通用 Engine port 的实现。Desktop composition root 创建 game、`DesktopPetRuntime<LizardRenderFrame>` 与 presenter；`PetWindow<TSnapshot>` 持有 runtime 和 presenter，不持有原始 game port，也不能访问 `BehaviorController` 或物理内部状态。
 
-## 每帧运行流程
+调试功能也遵守该边界：Gameplay 只通过 `ILizardPortableDebugBridge` 输出不可变的状态/骨架 DTO 与显式动作命令；FPS、指针、DPI、窗口跟随和轨迹队列仍由 Desktop 拥有。Windows WPF 与跨平台 Avalonia 面板因此可以呈现同一语义，而不会把显示帧或平台对象重新塞回 gameplay。
 
-```mermaid
-sequenceDiagram
-    participant DWM as CompositionTarget
-    participant W as PetWindow
-    participant S as PetSimulationSession
-    participant B as BehaviorController
-    participant L as ProceduralLizard
-    participant F as LizardRenderFrame
-    participant V as LizardView
+失手回抓同样不泄漏到平台层：行为 FSM 仍只有 `Falling → Regripping`，并输出 `LostGripReachProgress` 与 `ReachedTarget / SafetyForced` 转换原因；`DanglingRig2D` 在自由落体粒子约束内为四条肢体分别计算抓点与 IK，`RegripPoseController` 以四位接触掩码原子管理表现层的 `Seeking → ContactHold → Recovering`。每条肢体默认锁定捕获时的 IK 弯曲支路，仅允许在接近完全伸直且相邻肘部连续时切换一次；切换后的中段若需要避开躯干，可使用逐步有界的安全投影，不能靠回滚停住脚掌。只有四足路径、终点和当前姿态都通过安全契约，并且四足都到达各自目标，最终移动子步才原子提交接触；下一静止子步保持抓点并恢复。Windows/macOS renderer 只消费同一份 `LizardRenderFrame`，不各自实现伸手动画。
 
-    DWM->>W: Rendering timestamp
-    W->>W: 采样鼠标、DPI、工作区
-    W->>S: Advance(frame input)
-    loop accumulator 中每个完整 1/120 秒固定步
-        S->>B: Update(step, area, pointer)
-        B-->>S: 状态、位置、速度、情绪
-        S->>S: 映射 LizardAnimationInput
-        S->>L: Update(step, animation input)
-    end
-    S->>L: CaptureRenderFrame（姿态变化时）
-    L-->>S: 不可变姿态
-    S-->>W: Position + RenderFrame + optional DebugFrame
-    W->>V: Present(frame) / InvalidateVisual
-    W->>W: SetWindowPos + 点击穿透
-```
+领域源码也遵守同一边界：蜥蜴 `Core` 和 gameplay `Application` 文件只存在并编译于 `src/InfiniteLizards.Gameplay`。旧 WPF 宿主通过 `ProjectReference` 消费该程序集，不再编译第二份领域类型；架构测试会拒绝 Gameplay 项目的任何外部 `Compile` glob 或 WPF 源码重复。
 
-执行顺序是行为稳定性的组成部分：每个子步必须先更新 `BehaviorController`，再更新 `ProceduralLizard`。`FixedStepRunner` 跨显示帧保存不足一个固定步的余量，高刷新率显示器不会把 120 Hz 配置退化为可变小步。抓取期间的窗口位移会一直保留到真正执行固定步，再在该帧的所有子步间按比例分摊。
+## 固定步进所有权
 
-`PetSimulationSession` 私有持有两个可变模型；窗口只使用命令、只读标量和不可变帧。仅 Diagnostics 能通过明确命名的 `BehaviorForDiagnostics` / `LizardForDiagnostics` seam 进入模型内部，生产窗口不得使用该接缝。
+显示帧和模拟帧是两条边界：
 
-## 行为层
+1. Desktop 在每次宿主 tick 生成 `DesktopPetInput`，其中包含显示帧 delta、当前 world 导航/安全区和指针状态。
+2. Engine-owned `DesktopPetRuntime` 缓存构造时验证过的 metrics/timing，用 `FixedStepRunner` 累积显示时间并切成完整的 `DesktopPetFixedStepInput`。默认 profile 为 `1/120 s`，过大 display delta 按 `MaximumFrameCatchUp` 有界裁剪。
+3. `IDesktopPetGame<TSnapshot>` 只公开 `AdvanceFixedStep`；不存在 raw/display-frame `Advance`。Gameplay 因此看不到渲染刷新率，也不能自行维护第二个帧累积器。
+4. Runtime 在每个子步后校验 gameplay 位置/朝向为有限值，只在实际执行了 fixed step 后重新捕获不可变快照；无步显示帧复用上一快照。
+5. 抓取、释放、暂停、居中和 rebase 是显式命令。`RebaseWorldPosition(delta)` 只平移持久 world 状态，不重置计时、不消费随机数，也不伪装成一次 gameplay `MoveTo`。
 
-`BehaviorController` 是对外门面，保留世界坐标、当前状态和交互命令；构造时接收一个已解析的个体 Profile。主文件只保留字段、生命周期命令和更新优先级，自治、情绪、状态机、追鼠和边缘反应分别位于 partial/组件文件。可复用规则位于 `Core/Behavior`：
+这使同一 seed 和录制的 world input 可以在 50–240 Hz 不同显示节奏下得到相同 fixed-step 序列。
 
-- `RoamingState`：状态、Traits 和合法转移图。
-- `AutonomousTransitionPolicy`：接收单个随机样本并返回下一动作，集中校验转移矩阵概率。
-- `PointerChaseController`：注意、丢失、冷却和持续追逐的独立生命周期。
-- `BoundaryNavigator`：边缘距离、探针和安全转向的纯计算。
-- `SCurveMotionController` / `SCurveTrajectory`：多周期 S 弯状态与不消费随机数的轨迹函数。
-- `BehaviorController.LostGripFall`：自由落体、基于当前完整渲染安全底边的动态目标、重新抓稳及恢复自主态的完整生命周期。
-- `RestDurationDistribution`：30% / 35% / 25% / 10% 长尾休息映射。
-- `BehaviorPrimitives`：行为输入和基础值对象。
+根目录旧 WPF 入口所需的显示帧兼容逻辑位于 `Application/LegacyPetSimulationFrameAdapter.cs`，只编入 WPF host 与诊断测试；`InfiniteLizards.Gameplay.dll` 从项目边界上完全看不到该文件。程序集边界测试同时禁止 raw `Advance`、frame input/output 和第二个 `FixedStepRunner` 回流到 Gameplay。
 
-新增状态时至少需要检查：
+## 96-DIP 逻辑世界契约
 
-1. 状态枚举和合法转移图。
-2. `IsLocomoting`、`IsFastCrawl` 等 Traits。
-3. 状态入口是否完整初始化自己的计时和运动指令。
-4. 鼠标、抓取、暂停、边缘安全的抢占优先级。
-5. Debug 中文状态名和对应 SelfTest 覆盖。
+Gameplay 每一刻只在一块屏幕的逻辑坐标帧中运行。该坐标帧左上为原点、Y 向下、基于 96-DPI（world/DIP）：一个 world unit 在 Windows 100% 缩放下等于一个设备像素，在 200% 缩放下由两个 backing pixels 栅格化。macOS 的 Avalonia.Native/Screen 坐标是 Cocoa points；`Screen.Scaling` 为 1，真实 Retina backing scale 由 NSWindow 与 Skia 承担。任何 DPI/backing scale 都不能进入行为、物理、步态或随机数输入。
 
-随机行为必须保持 `Random.NextDouble()` 的调用次数与顺序。纯策略函数应接收已经生成的 sample，不能在模块内部偷偷增加随机抽样。
+`DisplayTopology` 接收每块屏幕的平台 device/point 坐标 `Bounds`/`WorkingArea` 和 `Scale`，为每块屏幕建立独立的 96-DIP 仿射映射。它保留屏幕排列、负坐标和工作区，但不声称一个无状态、静态的 world 映射能使混合 DPI 接缝上所有点都连续：对同一个原始 Y 坐标分别除以 1x 和 2x，本身就会得到不同 world Y。
 
-`LostGripFall` 是一个显式 FSM 状态，内部只有 `Falling` 与 `Regripping` 两个阶段。五种爬行态可通过 `Choice` 进入，完成后通过 `FallComplete` 进入短暂 `Idle`，再恢复正常自主爬行。真实鼠标抓取和暂停拥有更高优先级；追鼠不能抢占下坠。入口只抽样一次目标距离，下界为配置的 `MinimumDistance`，上界为当前位置到完整渲染安全底边的全部可用距离，不设置固定最大值。若底边可用距离不足最小值，当前位置不能满足左、右、上方的完整渲染安全留白，或物理工作区无法完整应用四边留白，入口直接交给 `EdgeTurn`，不允许依靠位置 Clamp 或收缩安全间距掩盖越界。
+`ActiveDisplaySpace` 是解决这个问题的有状态边界：
 
-## 配置与个体层
+- 它持有当前屏幕的仿射坐标帧；指针和窗口只在当前帧内做 device↔world 映射。
+- 当宠物或拖动指针跨入另一块屏幕时，先把被跟踪 world 位置经旧帧转成 device 位置，再经新帧转回 world；runtime 同步 `RebaseWorldPosition`，宿主同时重建拖动偏移与窗口放置，设备空间的可见位置不跳变。
+- 显示器热插拔、缩放或排列改变时，同样经 device space 把持久状态转入替换坐标帧；原屏幕消失时选择主屏，最后收敛到新工作区的完整渲染安全区。
+- `SurfacePlacement` 只使用当前屏幕映射；左/上向下取整，右/下向上取整，避免小数缩放时裁掉最外层像素。
 
-`LizardConfigurationStore` 是唯一 JSON I/O 边界，负责 schema 迁移、原子写入、坏文件保留和默认回退。配置经过完整校验后，由 `IndividualProfileFactory` 和各 resolver 生成只读 `LizardProfile`：
+因此，相同配置、seed 和 world 输入序列应产生相同的固定步进数、world 轨迹和渲染几何。“一样”指这个确定性契约；不承诺 Windows DWM 与 macOS WindowServer 的色彩管理、抗锯齿和合成像素 bit-identical。
 
-```mermaid
-flowchart LR
-    JSON["lizard-settings.json"] --> Store["ConfigurationStore"]
-    Store --> Validate["Validate + schema migration"]
-    Validate --> Factory["IndividualProfileFactory"]
-    Seed["IndividualSeed"] --> Factory
-    Factory --> Profile["LizardProfile"]
-    Profile --> Behavior
-    Profile --> Animation
-    Profile --> Rendering
-    Profile --> Windows
-```
+## 共享帧流程
 
-状态转移矩阵和休息分布都保持显式零权重，并在个体重权后重新归一化。同一配置和 seed 必须生成相同 Profile；个体变化的 RNG 流不得移动行为 FSM 的随机序列。`LizardGeometryEnvelope` 是正常姿态、悬挂/自由落体姿态、窗口画布和桌面导航半径的共同几何边界，任何模块不得复制另一套半径估算。它还计算紧凑正常导航半径与完整渲染窗口半径之差，作为失手下坠的四边安全留白；个体 Profile 改变体型或画布后会同步提升该留白。窗口层从当前物理工作区生成 `LostGripSafetyContext`，只有在四边都能精确应用该留白时才标记为可用；行为层据此确定动态底边上界，不能把不足的工作区静默压缩成“安全”区域。字段说明见 `CONFIGURATION.md`。
+1. Composition root 在首次 `Show` 前调用 `PrepareForShow`：绑定原生窗口边界，读取显示拓扑，以指针所在屏建立 `ActiveDisplaySpace`，重置 runtime/gameplay，并放置首帧窗口。
+2. Desktop 以最高 120 Hz 采样显示时间、全局指针和屏幕拓扑，然后把输入交给 Engine runtime。
+3. Runtime 执行零个或多个严格 fixed steps，并返回位置、朝向和不可变快照。
+4. `LizardView` 从同一份快照生成身体、阴影、四肢、脚、头与眼睛几何；Windows 和 macOS 都由 Avalonia + Skia 绘制。
+5. Windows shaped-window 路径在新 pose 提交时先安装“最近已确认姿态 + 全部未确认姿态”的保守并集；Avalonia `CompositionBatch.Rendered` 返回后才允许收窄原生 region。macOS 不创建这条 Windows 专用 fence。
+6. 宿主只在平台边界用当前 `ActiveDisplaySpace` 把 world surface 转为平台放置坐标。
 
-## 动画层
+## Windows 原生边界
 
-动画层维护模型空间中的脊柱、腿、足端和次级动作：
+`Win32OverlayWindowBackend` 不参与渲染或 gameplay，只建立 HWND 安全策略：
 
-- `LizardAnimationInput` 把完整行为状态收敛为 `Rest / Observe / Locomotion / FastSCurve / Grabbed / FreeFall / Regrip / ReleaseSettle` 八种表现语义。
-- `LegRig` 独立负责一条腿的两段 IK、步进曲线、reach 保护和诊断计数。
-- `DiagonalGaitController` 负责对角组交替、落点误差记忆和全足支撑锁。
-- `SecondaryMotionController` 负责呼吸、尾摆、身体起伏和眨眼。
-- `ProceduralLizard` 只编排脊柱、步态、悬挂/释放姿态并输出只读 `LizardRenderFrame`。
-- `DanglingRig2D` 只管理抓取、无 Pin 的自由落体、积分、回滚与释放生命周期；`DanglingTopology2D`、`DanglingConstraintSolver2D`、`DanglingPoseValidator`、`ParticleSolver2D` 和 `GrabBinding2D` 分别拥有拓扑、约束、校验、粒子与材质抓点算法。`FreeFall` 与抓起悬挂共享粒子和骨长约束，但抓点误差必须保持为零；`Regrip` 退出粒子态并复用连续的恢复混合。
+- Presenter 导出由 Bezier fill/stroke 与 ellipse 组成的不可变可见/输入几何；managed hit test 与 Win32 region 使用同一个 pose。Win32 以目标 DPI 和实测 client insets 把 view DIP 转到 outer-HWND 坐标，用 GDI path/region 构造 `SetWindowRgn`，并做 1 device pixel 抗锯齿安全膨胀。
+- `SetWindowRgn` 同时限定 HWND 的可见轮廓和原生命中轮廓。新 pose/version 先把最后一次 compositor-confirmed pose 与所有未确认 pose 做有界并集，绝不让新 region 抢跑裁掉旧 backing；`CompositionBatch.Rendered` 的单调 fence sequence 确认后才退休旧 pose 并收窄。队列上限为 8，合成停滞或原生同步失败时冻结新的视觉提交但固定步模拟继续。
+- 每个保留 pose 单独携带它可能出现的 raster scale；跨 DPI 时再保守加入当前/目标 live scale，避免 geometry×历史 scale 的无关笛卡尔积。`RenderScaling` 变化在下一个 Render 前排队同步，乱序确认、同版本不同 scale、fence 失败、capture/reset orphan acknowledgement 和关闭后的晚回调都不得让 region 倒退或失去 fail-closed。
+- 点击穿透不通过清空可见 region 实现。`EnableWindow(false)`/`WS_DISABLED` 是独立输入开关：需要交互时仅在 shaped region 已安装后启用 HWND；需要穿透、指针不可用或底层应用正在拖动时禁用 HWND，并保留相同可见轮廓。
+- 在首次 `Show` 或 region 失败时，同步安装空 region 并保持禁用/透明 fallback。锁定的 Avalonia 版本正常生命周期不重建 HWND；若已验证后的句柄意外变化，新 HWND 会先进入 fail-closed，随后生产进程 fail-stop，不能带着未重放的 placement/region 继续。
+- `WS_DISABLED` 在此窗口上由 overlay backend 独占为穿透开关；不得把 `PetWindow` 用作 modal dialog owner。未来增加模态设置窗时，必须显式仲裁 modal disable ownership，或使用独立 owner。
 
-`Core/Animation` 和 `ProceduralLizard` 不允许引用 `RoamingState`。新增行为状态时，只在 `PetSimulationSession` 的映射处决定其表现语义。
+这些约束已被跨平台可运行的 contract/self-tests 覆盖，但 `SetWindowRgn` 与 DWM 的实际视觉裁切、跨进程点击穿透、混合 DPI/HWND 重建和长期 GDI 句柄仍必须在真实 Windows 机器验证。
 
-## 诊断与发布门槛
+`tests/InfiniteLizards.Windows.NativeAcceptance` 有两种严格分开的模式。默认 primitives smoke 用两个独立进程和合成 HWND 验证 USER32/GDI32 基础契约；`--production <InfiniteLizards.Desktop.exe>` 则启动真实发布程序。生产 backend 只有在 nonce、真实父 PID/同 Session 与 route tag 全部有效时，才在实际 Avalonia WndProc 暴露只读计数；完成 `EnsureVisible` 的 region/style/input 验证前不会响应 ready。本轮 nonce 同时派生写入临时配置的高对比身体/瞳孔 marker，DWM 像素 oracle 只接受同一 marker，因此旧保活实例不能替当前 HWND 提供视觉证据。外部控制器仍独立读取窗口 PID、DPI/client、region、DWM screen composite、前台窗口和 GDI/USER 资源，并用 tagged `SendInput` 区分 probe 与真实桌宠的跨进程路由。该遥测不参与正常生产路径，也不绕过原生安全状态机。
 
-任何行为、步态、抓放或运行循环重构都必须通过：
+生产模式逐屏冷启动，能够证明该机器上的实际发布包、Bezier region builder、render fence 最终输出、DWM 合成和基本点击路由；它不能替代运行中跨屏 `WM_DPICHANGED`、热插拔、右键/拖动/capture 或长期 soak。当前代码仅在 macOS 交叉构建，不能据入口存在宣称 Windows 已 PASS。
 
-- `RoamingSelfTest`
-- `GaitSelfTest`
-- `MouseChaseSelfTest`
-- `GrabReleaseSelfTest`
-- `LivenessSelfTest`
-- `SimulationSessionSelfTest`
-- `ConfigurationSelfTest`
-- `LostGripFallSelfTest`
+## macOS 原生边界
 
-其中不得通过放宽以下约束来掩盖回归：对角组违规、植足漂移、reach 投影、目标夹紧、摆动夹紧、非法状态转移、非有限值、完整渲染窗口越界或重新抓稳首帧跳变。`LostGripFallSelfTest` 使用四行权重均为 100% 的测试 Profile 确定性触发状态，不依赖生产矩阵中 2% 的随机命中；它在 3 种屏幕高度、4 个起始 Y 区间和 36 个 seed 上验证目标落在 `[MinimumDistance, 实际安全底边可用距离]`、同 seed 会随可用高度产生更长下坠、旧固定上限不再封顶、实际可绘制 AABB/完整 HWND 四边零越界、极小工作区拒绝、有限值以及落体与重抓连续性。可通过 `--lost-grip-test=<报告路径>` 单独运行。
+`MacOsOverlayWindowBackend` 保留 Avalonia 的渲染所有权：
 
-## 扩展约束
+- Avalonia 创建的原始 AvnWindow/NSWindow 始终持有 AvnView、content view 和 Skia render target，它是唯一真实的渲染/输入 surface；绝不把 AvnView 搬到自建 panel。
+- 额外的透明、non-activating `NSPanel` 不承载内容并始终忽略鼠标，只作为 parent anchor；它声明 `CanJoinAllSpaces`/`FullScreenAuxiliary` 等 collection flags，请求普通桌面 Space 行为，但本轮只验收当前 Space 成员。它固定为目标屏内 1×1，真实 AvnWindow 作为 child 使用动态取得的 status/main-menu overlay level（当前机器读回为 `25`），并随当前屏幕或热插拔重新 anchor；该层级不额外承诺压过其他应用的原生全屏内容。
+- 运行时创建零 ivar 的 Objective-C subclass，令真实 surface 的 `canBecomeKeyWindow`/`canBecomeMainWindow` 永远为 false，同时验证实际 class、父子关系、窗口级别、collection behavior 和 getter 状态。
+- 生产模式的非激活策略或原生身份不满足时，适配器会锁存 fail-closed，让 surface 保持 `ignoresMouseEvents=true`；不能无声降级成一个可能抢焦点的普通可交互窗口。
+- macOS composition root 使用官方 `MacOSPlatformOptions` 设置 `ShowInDock=false` 和 `DisableAvaloniaAppDelegate=true`，避免 Avalonia 11.3.20 默认 AppDelegate 在启动完成时强制激活应用。该 LSUIElement 宿主没有 Dock 重开、Finder 文档/URL 打开契约；菜单退出继续走 `desktop.Shutdown()`。若未来需要这些系统级 delegate 事件，应实现不含强制激活的最小自有 delegate，不得恢复启动抢焦点。
+- 每帧保留 Avalonia 托管尺寸/backing 通知，再对 AvnWindow 用一次 `setFrame:display:` 原子更新真实位置和尺寸；销毁时先解除 parent/child，再关闭 anchor，AvnWindow 的 content/render ownership 始终不变。
 
-当前模块仍编译为一个 WPF 可执行项目，以保持 internal API、单文件发布和诊断 CLI 简单；目录、namespace、不可变输入/输出和 application seam 已提供编译前的清晰依赖边界。只有需要独立复用 Core 或并行发布诊断工具时，才把 Core、Application、WPF、Diagnostics 物理拆成多个项目。
+与当前交付包使用同一原生 runtime 的上一轮 arm64 与 osx-x64/Rosetta 包，已在 Apple Silicon 机器的 screen ID `1/2/4` 通过 native acceptance，三屏 backing scale 分别为 `2/2/1`。验收从 `SurfacePlacement` 进入正式托管放置、Y 转换、screen/anchor 与原子 `setFrame:` 路径，并读回 managed placement、native frame、parent/content、level/collection、非 key/main 状态及当前 Space 公开窗口列表。arm64 受控启动验收中，外部 `NSWorkspace` 221 个约 100 ms 样本与 `lsappinfo` 101 个约 250 ms 样本均始终保持原前台应用，宠物进程从未成为前台；x64/Rosetta 被验轮次在每块屏幕也始终读回原前台 Chrome。解锁后的 WindowServer 实测进一步确认两种架构的主屏 composite 有真实蜥蜴像素，且原生 hit routing 在交互/穿透切换后分别命中 surface/底层窗口。当前 arm64 包已更新 managed assemblies、重新严格签名，并在 2x/1x 外接屏实际运行和目视验收调试侧栏/叠层；完整 production native-acceptance 矩阵尚未重跑。child `isOnActiveSpace` 在跨屏重挂载时可与实际 composite 不一致，因此仅作诊断，不再作 PASS oracle。实体事件投递、其他应用原生全屏以及 Intel 真机仍是补充验收边界。
 
-后续扩展遵循：先把新数据加入对应 Configuration 并校验，再由 Profile resolver 决定个体变化，最后注入单一所有者。不得为了“灵活”重新加入全局可变设置、反射式参数查找或跨层直接读模型。
+## 扩展一种新宠物
+
+1. 新建独立 gameplay 项目，只引用 `DesktopPet.Engine`。
+2. 定义宠物自己的不可变 `TSnapshot`，并实现 `IDesktopPetGame<TSnapshot>`；只实现 fixed-step 与显式交互/rebase 命令，所有尺寸和位置都使用 world unit。
+3. 新建只消费该快照的 presenter/view；view 不反向操作 gameplay，并让可见几何与命中几何来自同一个 pose。
+4. 在 Desktop composition root 组装 game + `DesktopPetRuntime` + presenter。只有宠物需要新的原生系统能力时才扩展小型 platform capability 接口。
+5. 对同一 seed/world 输入添加无 UI 确定性测试，再补 100%/125%/150%/200% 拓扑与目标系统真机冒烟测试。
+
+## 发布门槛
+
+- 自动基线：Engine `12/12`、Gameplay `16/16`、Desktop `29/29`，Windows 原生验收控制器纯逻辑测试 `5/5`；solution Release build 必须为 `0 warning / 0 error`。
+- Windows 真机：在解锁且无人操作的混合 DPI 交互桌面依次通过 Win32 primitives smoke 与 `--production ... --require-mixed-dpi`（均不得使用 `--allow-skip`），再补运行中跨屏、热插拔、右键/拖动/capture、HWND rebuild 与长期 GDI/CPU 观察。
+- macOS 真机：Retina/非 Retina，内置+外接屏、普通桌面 Spaces、解锁状态下真实点击穿透且应用不激活/不抢焦点；Apple Silicon 与 Intel 分别验证。覆盖其他应用的原生全屏窗口是额外能力，不属于当前原生层级契约。
+- 对截图做几何容差比较，而不是跨操作系统逐像素哈希比较。
+- macOS 发布必须通过 Hardened Runtime + `allow-jit` 签名验证；Developer ID notarization 需要发布者自己的 Apple 凭据。
+
+具体命令、当前已验证范围和发布步骤见 [CROSS_PLATFORM.md](CROSS_PLATFORM.md)。

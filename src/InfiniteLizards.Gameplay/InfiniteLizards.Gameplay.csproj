@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>InfiniteLizards.Gameplay</AssemblyName>
+    <RootNamespace>InfiniteLizards.Gameplay</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../DesktopPet.Engine/DesktopPet.Engine.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Compatibility-only access for the original WPF host. Gameplay remains
+         the sole assembly that compiles the lizard domain sources. -->
+    <InternalsVisibleTo Include="DesktopLizard" />
+    <InternalsVisibleTo Include="InfiniteLizards.Desktop" />
+    <InternalsVisibleTo Include="InfiniteLizards.Gameplay.SelfTests" />
+  </ItemGroup>
+</Project>

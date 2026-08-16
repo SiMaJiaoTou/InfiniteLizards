@@ -1,4 +1,5 @@
 using System.Numerics;
+using DesktopPet.Engine;
 using DesktopLizard.AppRuntime;
 using DesktopLizard.Core;
 using DesktopLizard.Diagnostics.Framework;

@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>InfiniteLizards.Desktop</AssemblyName>
+    <RootNamespace>InfiniteLizards.Desktop</RootNamespace>
+    <Version>2.0.0</Version>
+    <Authors>Infinite Lizards</Authors>
+    <Product>Infinite Lizards</Product>
+    <Description>Cross-platform desktop-pet host for Windows and macOS.</Description>
+    <InvariantGlobalization>false</InvariantGlobalization>
+    <AvaloniaUseCompiledBindingsByDefault>true</AvaloniaUseCompiledBindingsByDefault>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- 11.3 is the maintained Avalonia line built against the .NET 8 LTS
+         compiler; Windows and macOS still share the same Skia backend. -->
+    <PackageReference Include="Avalonia.Desktop" Version="11.3.20" />
+    <PackageReference Include="Avalonia.Themes.Fluent" Version="11.3.20" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\DesktopPet.Engine\DesktopPet.Engine.csproj" />
+    <ProjectReference Include="..\InfiniteLizards.Gameplay\InfiniteLizards.Gameplay.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="InfiniteLizards.Desktop.SelfTests" />
+  </ItemGroup>
+</Project>

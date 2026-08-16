@@ -1,0 +1,61 @@
+name: Windows production native acceptance
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  native-production:
+    # These custom labels are a contract: the runner must be an unlocked,
+    # unattended Windows desktop process owned by the signed-in user, with at
+    # least two monitors exposing distinct DPIs. A service runner is invalid.
+    runs-on: [self-hosted, Windows, X64, interactive-desktop, mixed-dpi]
+    timeout-minutes: 15
+
+    concurrency:
+      group: windows-native-input-${{ github.repository }}
+      cancel-in-progress: false
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+
+      - name: Install .NET 8 SDK
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Restore native controller
+        run: dotnet restore tests/InfiniteLizards.Windows.NativeAcceptance/InfiniteLizards.Windows.NativeAcceptance.csproj -r win-x64
+
+      - name: Build native controller
+        run: dotnet build tests/InfiniteLizards.Windows.NativeAcceptance/InfiniteLizards.Windows.NativeAcceptance.csproj -c Release -r win-x64 --no-restore
+
+      - name: Verify native-controller safety contracts
+        run: >-
+          & "$env:GITHUB_WORKSPACE\tests\InfiniteLizards.Windows.NativeAcceptance\bin\Release\net8.0-windows\win-x64\InfiniteLizards.Windows.NativeAcceptance.exe"
+          --self-test
+
+      - name: Publish the real Desktop application
+        run: >-
+          dotnet publish src/InfiniteLizards.Desktop/InfiniteLizards.Desktop.csproj
+          -c Release -r win-x64 --self-contained true
+          -p:DebugType=None -p:DebugSymbols=false
+          -o artifacts/win-x64
+
+      - name: Verify Win32 primitives in the interactive desktop
+        # Do not pass --allow-skip: a locked, secure, inactive, or service
+        # session returns 77 and must fail this acceptance job.
+        run: >-
+          & "$env:GITHUB_WORKSPACE\tests\InfiniteLizards.Windows.NativeAcceptance\bin\Release\net8.0-windows\win-x64\InfiniteLizards.Windows.NativeAcceptance.exe"
+
+      - name: Verify the production Avalonia, Skia, DWM, and Win32 path
+        # This launches the published InfiniteLizards.Desktop.exe itself. It
+        # moves the pointer and sends tagged clicks, so the dedicated desktop
+        # must remain untouched for the duration of the job.
+        run: >-
+          & "$env:GITHUB_WORKSPACE\tests\InfiniteLizards.Windows.NativeAcceptance\bin\Release\net8.0-windows\win-x64\InfiniteLizards.Windows.NativeAcceptance.exe"
+          --production "$env:GITHUB_WORKSPACE\artifacts\win-x64\InfiniteLizards.Desktop.exe"
+          --require-mixed-dpi

@@ -1,8 +1,11 @@
+using System.Diagnostics;
 using System.Numerics;
 using DesktopLizard.AppRuntime;
 using DesktopLizard.Core;
 using DesktopLizard.Diagnostics.Framework;
 using DesktopLizard.Rendering;
+using DesktopPet.Engine;
+using InfiniteLizards.Gameplay;
 
 namespace DesktopLizard.Diagnostics;
 
@@ -26,6 +29,58 @@ internal readonly record struct LostGripFallTestResult(
     float MaximumReferenceCorrectionTotal,
     float MaximumReferenceCorrection,
     float MaximumReferenceCenterError,
+    int ReachSeekingEntries,
+    int ContactHoldEntries,
+    int ReachOrderingViolations,
+    int ReachDirectionViolations,
+    int ReachIkBranchViolations,
+    int ReachIkBranchTransitions,
+    float MinimumIkBranchTransitionStraightness,
+    float MaximumIkBranchTransitionElbowJump,
+    string WorstIkBranchTransitionDetail,
+    float MaximumNonBranchLimbPoseJump,
+    string WorstNonBranchLimbPoseJumpDetail,
+    int ReachRequiresProjectionLegMask,
+    int ReachProjectedLimbSamples,
+    int ReachRollbackLimbSamples,
+    int ReachProjectionContinuityViolations,
+    float MaximumProjectionLimbPoseJump,
+    string WorstProjectionLimbPoseJumpDetail,
+    int ReachBodyClearanceViolations,
+    int ReachOwnEnvelopeReentryViolations,
+    string WorstReachBodyClearanceDetail,
+    string FirstReachOwnEnvelopeReentryDetail,
+    string PerLegFirstReachOwnEnvelopeReentryDetail,
+    string PerLegReachGeometryDetail,
+    string WorstReachTimingDetail,
+    double CaptureStepTimingMedianMilliseconds,
+    double CaptureStepTimingMaximumMilliseconds,
+    int ContactStopViolations,
+    int FourTargetScenarios,
+    int FourLegObservedScenarios,
+    int MinimumNonZeroSeekingSteps,
+    float MinimumBehaviorReachPeak,
+    float MinimumReachTargetErrorReduction,
+    float MinimumFootUpwardTravel,
+    float MinimumPawCatchDirectionTravel,
+    float MinimumArmRadiusRetention,
+    float MaximumFirstVisibleArmRetraction,
+    float MinimumFrontHeadwardTargetTravel,
+    float MinimumRearTailwardTargetTravel,
+    float MinimumTargetSeparation,
+    float MinimumNonOwnedBodyClearance,
+    float MaximumReachEntryPoseJump,
+    float MaximumTerminalReachError,
+    float MaximumContactError,
+    float MaximumContactSpineDrift,
+    float MaximumPostContactWindowDrift,
+    float MaximumPostContactVisualCentroidDrift,
+    int MinimumRecordedLostGripSteps,
+    int MinimumMovingVisiblePawSteps,
+    int MinimumVisiblePawMotionLeadSteps,
+    int MinimumMovingVisiblePawDisplayFrames60Hz,
+    int MinimumVisiblePawMotionLeadDisplayFrames60Hz,
+    int PreStopPawMotionViolations,
     float MinimumCanvasMargin,
     int NavigationBoundaryViolations,
     int FullRenderBoundaryViolations,
@@ -46,6 +101,24 @@ internal readonly record struct LostGripFallTestResult(
     bool NearBottomCancellationPassed,
     bool SideEdgeCancellationPassed,
     bool TinyAreaCancellationPassed,
+    bool NonFreeFallInputIsolationPassed,
+    bool RealGrabAnimationIsolationPassed,
+    float RealGrabMaximumError,
+    bool CollapsedLeadFourPawContinuityPassed,
+    bool IkBranchTransitionPolicyPassed,
+    bool MinimalLeadBranchTransitionPassed,
+    string MinimalLeadBranchTransitionDetail,
+    bool ContactSafeNegativeContractPassed,
+    string ContactSafeNegativeContractDetail,
+    bool RotatedHeadingFourPawGeometryPassed,
+    string RotatedHeadingFourPawGeometryDetail,
+    bool DpiRefreshDeterminismPassed,
+    bool MidSeekingSafetyLossFallbackPassed,
+    string MidSeekingSafetyLossFallbackDetail,
+    float MaximumSafetyLossPoseJump,
+    float MinimumSafetyLossBoundaryMargin,
+    int SafetyLossFakeContactSamples,
+    int SafetyLossBranchTransitionsAfterTrigger,
     bool PointerPriorityPassed,
     bool GrabPriorityPassed,
     bool PausePriorityPassed,
@@ -138,12 +211,58 @@ internal static class LostGripFallSelfTest
             RunSideEdgeCancellations(profile, screen));
         var tinyAreaCancellationPassed = RunTinyAreaCancellations(profile);
         RunHeightScalingChecks(profile, screens[0], screens[^1], metrics);
+        var nonFreeFallInputIsolationPassed = RunNonFreeFallInputIsolation(profile);
+        var realGrabAnimationIsolationPassed = RunRealGrabAnimationIsolation(
+            profile,
+            screens[1],
+            out var realGrabMaximumError);
+        var collapsedLeadFourPawContinuityPassed =
+            RunCollapsedLeadFourPawContinuity(profile);
+        var ikBranchTransitionPolicyPassed =
+            RunIkBranchTransitionPolicyContract();
+        var minimalLeadBranchTransitionPassed =
+            RunMinimalLeadBranchTransitionContract(
+                profile,
+                out var minimalLeadBranchTransitionDetail);
+        var contactSafeNegativeContractPassed =
+            RunContactSafeNegativeContract(
+                profile,
+                out var contactSafeNegativeContractDetail);
+        var rotatedHeadingFourPawGeometryPassed =
+            RunRotatedHeadingFourPawGeometry(
+                profile,
+                out var rotatedHeadingFourPawGeometryDetail);
+        var dpiRefreshDeterminismPassed = RunDpiRefreshDeterminism(profile);
+        var safetyLossFallback = RunMidSeekingSafetyLossFallback(
+            profile,
+            screens[^1]);
+        safetyLossFallback = safetyLossFallback with
+        {
+            Passed = safetyLossFallback.Passed &&
+                     RunNearCompleteSafetyContactGate(profile) &&
+                     RunNearCompleteReachedTargetContactGate(profile)
+        };
         var grabPriorityPassed = RunGrabPriority(profile, screens[1]);
         var pausePriorityPassed = RunPausePriority(profile, screens[1]);
         var debugChineseLabelsPassed =
             DebugPanelView.StateLabel(RoamingState.LostGripFall) == "失手下坠" &&
             DebugPanelView.LostGripPhaseLabel(LostGripFallPhase.Falling) == "自由下坠" &&
-            DebugPanelView.LostGripPhaseLabel(LostGripFallPhase.Regripping) == "重新抓稳";
+            DebugPanelView.LostGripPhaseLabel(LostGripFallPhase.Regripping) == "重新抓稳" &&
+            DebugPanelView.LostGripProgressLabel(
+                LostGripFallPhase.Falling,
+                LostGripCatchReason.None,
+                0.42f,
+                0f) == "伸手42%" &&
+            DebugPanelView.LostGripProgressLabel(
+                LostGripFallPhase.Regripping,
+                LostGripCatchReason.ReachedTarget,
+                0f,
+                0.5f) == "抓稳50%" &&
+            DebugPanelView.LostGripProgressLabel(
+                LostGripFallPhase.Regripping,
+                LostGripCatchReason.SafetyForced,
+                0f,
+                0.5f) == "安全恢复50%";
 
         if (!float.IsFinite(metrics.MinimumFallDistance))
         {
@@ -161,6 +280,8 @@ internal static class LostGripFallSelfTest
         {
             metrics.MinimumVisualMargin = 0f;
         }
+        metrics.NormalizeReachMinimums();
+        var captureStepTiming = MeasureCaptureStepTiming(profile, screens[0]);
 
         return new LostGripFallTestResult(
             false,
@@ -182,6 +303,58 @@ internal static class LostGripFallSelfTest
             metrics.MaximumReferenceCorrectionTotal,
             metrics.MaximumReferenceCorrection,
             metrics.MaximumReferenceCenterError,
+            metrics.ReachSeekingEntries,
+            metrics.ContactHoldEntries,
+            metrics.ReachOrderingViolations,
+            metrics.ReachDirectionViolations,
+            metrics.ReachIkBranchViolations,
+            metrics.ReachIkBranchTransitions,
+            metrics.MinimumIkBranchTransitionStraightness,
+            metrics.MaximumIkBranchTransitionElbowJump,
+            metrics.WorstIkBranchTransitionDetail,
+            metrics.MaximumNonBranchLimbPoseJump,
+            metrics.WorstNonBranchLimbPoseJumpDetail,
+            metrics.ReachRequiresProjectionLegMask,
+            metrics.ReachProjectedLimbSamples,
+            metrics.ReachRollbackLimbSamples,
+            metrics.ReachProjectionContinuityViolations,
+            metrics.MaximumProjectionLimbPoseJump,
+            metrics.WorstProjectionLimbPoseJumpDetail,
+            metrics.ReachBodyClearanceViolations,
+            metrics.ReachOwnEnvelopeReentryViolations,
+            metrics.WorstReachBodyClearanceDetail,
+            metrics.FirstReachOwnEnvelopeReentryDetail,
+            metrics.PerLegFirstReachOwnEnvelopeReentryDetail,
+            metrics.PerLegReachGeometryDetail,
+            metrics.WorstReachTimingDetail,
+            captureStepTiming.MedianMilliseconds,
+            captureStepTiming.MaximumMilliseconds,
+            metrics.ContactStopViolations,
+            metrics.FourTargetScenarios,
+            metrics.FourLegObservedScenarios,
+            metrics.MinimumNonZeroSeekingSteps,
+            metrics.MinimumBehaviorReachPeak,
+            metrics.MinimumReachTargetErrorReduction,
+            metrics.MinimumFootUpwardTravel,
+            metrics.MinimumPawCatchDirectionTravel,
+            metrics.MinimumArmRadiusRetention,
+            metrics.MaximumFirstVisibleArmRetraction,
+            metrics.MinimumFrontHeadwardTargetTravel,
+            metrics.MinimumRearTailwardTargetTravel,
+            metrics.MinimumTargetSeparation,
+            metrics.MinimumNonOwnedBodyClearance,
+            metrics.MaximumReachEntryPoseJump,
+            metrics.MaximumTerminalReachError,
+            metrics.MaximumContactError,
+            metrics.MaximumContactSpineDrift,
+            metrics.MaximumPostContactWindowDrift,
+            metrics.MaximumPostContactVisualCentroidDrift,
+            metrics.MinimumRecordedLostGripSteps,
+            metrics.MinimumMovingVisiblePawSteps,
+            metrics.MinimumVisiblePawMotionLeadSteps,
+            metrics.MinimumMovingVisiblePawDisplayFrames60Hz,
+            metrics.MinimumVisiblePawMotionLeadDisplayFrames60Hz,
+            metrics.PreStopPawMotionViolations,
             metrics.MinimumCanvasMargin,
             metrics.NavigationBoundaryViolations,
             metrics.FullRenderBoundaryViolations,
@@ -202,6 +375,24 @@ internal static class LostGripFallSelfTest
             nearBottomCancellationPassed,
             sideEdgeCancellationPassed,
             tinyAreaCancellationPassed,
+            nonFreeFallInputIsolationPassed,
+            realGrabAnimationIsolationPassed,
+            realGrabMaximumError,
+            collapsedLeadFourPawContinuityPassed,
+            ikBranchTransitionPolicyPassed,
+            minimalLeadBranchTransitionPassed,
+            minimalLeadBranchTransitionDetail,
+            contactSafeNegativeContractPassed,
+            contactSafeNegativeContractDetail,
+            rotatedHeadingFourPawGeometryPassed,
+            rotatedHeadingFourPawGeometryDetail,
+            dpiRefreshDeterminismPassed,
+            safetyLossFallback.Passed,
+            safetyLossFallback.Detail,
+            safetyLossFallback.MaximumPoseJump,
+            safetyLossFallback.MinimumBoundaryMargin,
+            safetyLossFallback.FakeContactSamples,
+            safetyLossFallback.BranchTransitionsAfterTrigger,
             metrics.PointerPriorityViolations == 0,
             grabPriorityPassed,
             pausePriorityPassed,
@@ -234,6 +425,12 @@ internal static class LostGripFallSelfTest
         var entryWorldSpineCenter = Vector2.Zero;
         var regripWorldSpineCenter = Vector2.Zero;
         var hasRegripWorldSpineCenter = false;
+        var reachProbe = new LostGripRegripAnimationProbe(
+            behavior.Position,
+            lizard,
+            $"seed={seed},screen={screen.WorkArea.Width:F0}x" +
+            $"{screen.WorkArea.Height:F0},band={startBand}," +
+            $"start=({start.X:F1},{start.Y:F1})");
 
         for (var step = 0; step < 12f / DeltaTime; step++)
         {
@@ -340,7 +537,7 @@ internal static class LostGripFallSelfTest
                 metrics.AutonomousRecoveries++;
             }
 
-            ObserveSafety(
+            var visualCenter = ObserveSafety(
                 profile,
                 screen,
                 behavior,
@@ -364,6 +561,11 @@ internal static class LostGripFallSelfTest
             }
 
             var currentPose = PoseSnapshot.Capture(lizard);
+            reachProbe.Observe(
+                behavior,
+                lizard,
+                visualCenter,
+                frame.RenderFrame);
             if (previousDangling &&
                 !debugPose.DanglingActive &&
                 behavior.LostGripPhase == LostGripFallPhase.Regripping)
@@ -402,6 +604,7 @@ internal static class LostGripFallSelfTest
 
             if (recovered)
             {
+                metrics.RecordReach(reachProbe.Complete());
                 metrics.CompletedScenarios++;
                 return;
             }
@@ -642,6 +845,1681 @@ internal static class LostGripFallSelfTest
         return behavior.State == RoamingState.ReleaseSettle && IsFinite(session);
     }
 
+    private static bool RunNonFreeFallInputIsolation(LizardProfile profile)
+    {
+        var lizard = new ProceduralLizard(profile);
+        var mood = EmotionBlend.Normalize(new EmotionBlend(0.25f, 0.25f, 0.25f, 0.25f));
+        var nonFallInput = new LizardAnimationInput(
+            0f,
+            0f,
+            LizardPoseMode.Rest,
+            mood,
+            0f,
+            Vector2.Zero)
+        {
+            CatchPreparationProgress = 1f
+        };
+        lizard.Update(DeltaTime, nonFallInput);
+        var restIsolated =
+            lizard.CurrentPoseMode == LizardPoseMode.Rest &&
+            lizard.RegripAnimationPhase == RegripAnimationPhase.None &&
+            !lizard.RegripReachActive &&
+            lizard.RegripReachProgress == 0f &&
+            !lizard.RegripContacted &&
+            lizard.RegripContactLegMask == 0;
+
+        lizard.BeginGrab(lizard.Spine.Joints[6]);
+        var grabbedInput = nonFallInput with { PoseMode = LizardPoseMode.Grabbed };
+        lizard.Update(DeltaTime, grabbedInput);
+        return restIsolated &&
+               lizard.CurrentPoseMode == LizardPoseMode.Grabbed &&
+               lizard.RegripAnimationPhase == RegripAnimationPhase.None &&
+               !lizard.RegripReachActive &&
+               lizard.RegripReachProgress == 0f &&
+               !lizard.RegripContacted &&
+               lizard.RegripContactLegMask == 0 &&
+               lizard.Spine.Joints.All(IsFinite) &&
+               lizard.Legs.All(leg => IsFinite(leg.Elbow) && IsFinite(leg.Foot));
+    }
+
+    private static bool RunRealGrabAnimationIsolation(
+        LizardProfile profile,
+        ScreenContext screen,
+        out float maximumGrabError)
+    {
+        var session = new PetSimulationSession(0x5B91, profile);
+        session.Reset(screen.NavigationArea.Center, 0f);
+        var behavior = session.BehaviorForDiagnostics;
+        var lizard = session.LizardForDiagnostics;
+        session.BeginGrab(lizard.Spine.Joints[6]);
+        maximumGrabError = 0f;
+        var passed = behavior.State == RoamingState.Grabbed;
+        for (var step = 0; step < 0.75f / DeltaTime; step++)
+        {
+            var target = screen.NavigationArea.Center + new Vector2(
+                MathF.Sin(step * 0.071f) * 36f,
+                MathF.Cos(step * 0.053f) * 24f);
+            session.DragTo(target);
+            session.Advance(Input(
+                DeltaTime,
+                screen.NavigationArea,
+                profile,
+                isDragging: true,
+                lostGripSafety: screen.LostGripSafety));
+            maximumGrabError = Math.Max(maximumGrabError, lizard.DanglingGrabError);
+            passed &=
+                behavior.State == RoamingState.Grabbed &&
+                lizard.CurrentPoseMode == LizardPoseMode.Grabbed &&
+                lizard.RegripAnimationPhase == RegripAnimationPhase.None &&
+                !lizard.RegripReachActive &&
+                lizard.RegripReachProgress == 0f &&
+                !lizard.RegripContacted &&
+                lizard.RegripContactLegMask == 0 &&
+                lizard.DanglingGrabError <= profile.Physics.MaximumGrabError + 0.001f &&
+                lizard.DanglingConstraintError <=
+                    profile.Physics.MaximumConstraintError + 0.001f &&
+                IsFinite(session);
+        }
+        session.EndGrab(behavior.Position);
+        return passed &&
+               behavior.State == RoamingState.ReleaseSettle &&
+               IsFinite(session);
+    }
+
+    private static bool RunCollapsedLeadFourPawContinuity(LizardProfile profile)
+    {
+        var baseline = new ProceduralLizard(profile);
+        var collapsed = new ProceduralLizard(profile);
+        var emotion = EmotionBlend.Normalize(
+            new EmotionBlend(1f, 0f, 0f, 0f));
+        var input = new LizardAnimationInput(
+            0f,
+            0f,
+            LizardPoseMode.FreeFall,
+            emotion,
+            0.9f,
+            new Vector2(0f, 1f));
+
+        baseline.Update(DeltaTime, input);
+        collapsed.Update(
+            DeltaTime,
+            input with
+            {
+                CatchPreparationProgress = 1f,
+                CatchPreparationContactAllowed = false
+            });
+
+        var baselinePose = PoseSnapshot.Capture(baseline);
+        var collapsedPose = PoseSnapshot.Capture(collapsed);
+        return baselinePose.MaximumDistance(collapsedPose) <= 0.0001f &&
+               BendSignsMatch(baseline, collapsed) &&
+               collapsed.RegripAnimationPhase == RegripAnimationPhase.Seeking &&
+               collapsed.RegripReachActive &&
+               collapsed.RegripReachProgress >= 1f - 0.0001f &&
+               collapsed.RegripContactError <= 0.0001f &&
+               !collapsed.RegripContacted &&
+               collapsed.RegripContactLegMask == 0 &&
+               Enumerable.Range(0, 4).All(index =>
+                   Vector2.Distance(
+                       collapsed.Legs[index].Foot,
+                       collapsed.RegripContactTarget(index)) <= 0.0001f);
+    }
+
+    private static bool RunIkBranchTransitionPolicyContract() =>
+        LostGripRegripAnimationProbe.IsNearStraightIkBranchTransitionAllowed(
+            transitionsBefore: 0,
+            previousStraightness: 0.99f,
+            currentStraightness: 1f,
+            elbowJump:
+                LostGripRegripAnimationProbe.MaximumBranchTransitionElbowJump) &&
+        !LostGripRegripAnimationProbe.IsNearStraightIkBranchTransitionAllowed(
+            transitionsBefore: 0,
+            previousStraightness: 0.95f,
+            currentStraightness: 1f,
+            elbowJump: 0.1f) &&
+        !LostGripRegripAnimationProbe.IsNearStraightIkBranchTransitionAllowed(
+            transitionsBefore: 1,
+            previousStraightness: 1f,
+            currentStraightness: 1f,
+            elbowJump: 0.1f) &&
+        !LostGripRegripAnimationProbe.IsNearStraightIkBranchTransitionAllowed(
+            transitionsBefore: 0,
+            previousStraightness: 1f,
+            currentStraightness: 1f,
+            elbowJump:
+                LostGripRegripAnimationProbe.MaximumBranchTransitionElbowJump +
+                0.01f);
+
+    private static bool BendSignsMatch(
+        ProceduralLizard first,
+        ProceduralLizard second) =>
+        Enumerable.Range(0, 4).All(index =>
+            MeasureBendSign(first.Legs[index]) ==
+            MeasureBendSign(second.Legs[index]));
+
+    private static float MeasureBendSign(LegRig leg)
+    {
+        var shoulderToFoot = MathEx.SafeNormalize(
+            leg.Foot - leg.Shoulder,
+            -Vector2.UnitY);
+        var bendHeight = Vector2.Dot(
+            leg.Elbow - leg.Shoulder,
+            MathEx.Perpendicular(shoulderToFoot));
+        return MathF.Abs(bendHeight) > 0.0001f
+            ? MathF.Sign(bendHeight)
+            : 0f;
+    }
+
+    private static int CountAndUpdateBendSignTransitions(
+        ProceduralLizard lizard,
+        float[] lastNonZeroSigns)
+    {
+        var transitions = 0;
+        for (var index = 0; index < 4; index++)
+        {
+            var current = MeasureBendSign(lizard.Legs[index]);
+            if (current == 0f)
+            {
+                continue;
+            }
+            if (lastNonZeroSigns[index] != 0f &&
+                lastNonZeroSigns[index] != current)
+            {
+                transitions++;
+            }
+            lastNonZeroSigns[index] = current;
+        }
+        return transitions;
+    }
+
+    private static Vector2 SolveTwoBoneElbow(
+        Vector2 shoulder,
+        Vector2 foot,
+        float upperLength,
+        float lowerLength,
+        float bendSign)
+    {
+        var shoulderToFoot = foot - shoulder;
+        var distance = Math.Max(0.0001f, shoulderToFoot.Length());
+        var direction = shoulderToFoot / distance;
+        var along = Math.Clamp(
+            (upperLength * upperLength - lowerLength * lowerLength +
+             distance * distance) /
+            (2f * distance),
+            0f,
+            upperLength);
+        var perpendicularDistance = MathF.Sqrt(Math.Max(
+            0f,
+            upperLength * upperLength - along * along));
+        return shoulder + direction * along +
+               MathEx.Perpendicular(direction) *
+               (perpendicularDistance * bendSign);
+    }
+
+    private static ProceduralLizard? CreateLegalCapturePoseLizard(
+        LizardProfile profile,
+        float rotation = 0f)
+    {
+        var screen = CreateScreenContext(
+            profile,
+            new FloatRect(0f, 0f, 1280f, 720f));
+        var safeArea = screen.LostGripSafety.SafeArea;
+        var maximumAvailable = Math.Max(
+            profile.Behavior.LostGripFall.MinimumDistance,
+            safeArea.Height - 2f);
+        var availableDistance = Math.Min(
+            maximumAvailable,
+            profile.Behavior.LostGripFall.MinimumDistance + 14f);
+        var start = new Vector2(
+            safeArea.Center.X,
+            safeArea.Bottom - availableDistance);
+        var session = new PetSimulationSession(0x5A17, profile);
+        session.Reset(start, 0f);
+        for (var step = 0; step < 1000; step++)
+        {
+            session.Advance(Input(
+                DeltaTime,
+                screen.NavigationArea,
+                profile,
+                lostGripSafety: screen.LostGripSafety));
+            var source = session.LizardForDiagnostics;
+            if (source.RegripAnimationPhase != RegripAnimationPhase.Seeking ||
+                source.RegripReachProgress > 0.0001f ||
+                !source.RegripReachContactSafe)
+            {
+                continue;
+            }
+
+            var center = source.Spine.Joints.Aggregate(
+                Vector2.Zero,
+                static (sum, point) => sum + point) /
+                source.Spine.Joints.Count;
+            Vector2 Transform(Vector2 point)
+            {
+                var offset = point - center;
+                var cosine = MathF.Cos(rotation);
+                var sine = MathF.Sin(rotation);
+                return center + new Vector2(
+                    offset.X * cosine - offset.Y * sine,
+                    offset.X * sine + offset.Y * cosine);
+            }
+
+            var clone = new ProceduralLizard(profile);
+            clone.Spine.SetPose(source.Spine.Joints.Select(Transform).ToArray());
+            for (var index = 0; index < 4; index++)
+            {
+                var sourceLeg = source.Legs[index];
+                clone.Legs[index].SetDanglingPose(
+                    Transform(sourceLeg.Shoulder),
+                    Transform(sourceLeg.Elbow),
+                    Transform(sourceLeg.Foot));
+            }
+            return clone;
+        }
+        return null;
+    }
+
+    private static (
+        double MedianMilliseconds,
+        double MaximumMilliseconds) MeasureCaptureStepTiming(
+        LizardProfile profile,
+        ScreenContext screen)
+    {
+        const int WarmupRuns = 1;
+        const int MeasuredRuns = 7;
+        var safeArea = screen.LostGripSafety.SafeArea;
+        var maximumAvailable = Math.Max(
+            profile.Behavior.LostGripFall.MinimumDistance,
+            safeArea.Height - 2f);
+        var availableDistance = Math.Min(
+            maximumAvailable,
+            profile.Behavior.LostGripFall.MinimumDistance + 14f);
+        var start = new Vector2(
+            safeArea.Center.X,
+            safeArea.Bottom - availableDistance);
+        var samples = new List<double>(MeasuredRuns);
+        for (var run = 0; run < WarmupRuns + MeasuredRuns; run++)
+        {
+            var session = new PetSimulationSession(0x5A17, profile);
+            session.Reset(start, 0f);
+            for (var step = 0; step < 1000; step++)
+            {
+                var stopwatch = Stopwatch.StartNew();
+                session.Advance(Input(
+                    DeltaTime,
+                    screen.NavigationArea,
+                    profile,
+                    lostGripSafety: screen.LostGripSafety));
+                stopwatch.Stop();
+                if (session.LizardForDiagnostics.RegripAnimationPhase !=
+                    RegripAnimationPhase.Seeking)
+                {
+                    continue;
+                }
+                if (run >= WarmupRuns)
+                {
+                    samples.Add(stopwatch.Elapsed.TotalMilliseconds);
+                }
+                break;
+            }
+        }
+        if (samples.Count == 0)
+        {
+            return (0d, 0d);
+        }
+        samples.Sort();
+        return (samples[samples.Count / 2], samples[^1]);
+    }
+
+    private static bool RunMinimalLeadBranchTransitionContract(
+        LizardProfile profile,
+        out string detail)
+    {
+        const float CaptureProgress = 0.1f;
+        // After capture remapping and the linear/SmoothStep blend, these map
+        // to path amounts about 0.182 and 0.258. The former commits the
+        // captured branch at full extension; the latter switches branch on
+        // the same full-extension plateau.
+        const float ExtensionProgress = 0.307f;
+        const float SwitchProgress = 0.37f;
+        var emotion = EmotionBlend.Normalize(
+            new EmotionBlend(1f, 0f, 0f, 0f));
+
+        LizardAnimationInput Input(float progress, bool contactAllowed) =>
+            new(
+                0f,
+                0f,
+                LizardPoseMode.FreeFall,
+                emotion,
+                0.9f,
+                new Vector2(0f, 1f))
+            {
+                CatchPreparationProgress = progress,
+                CatchPreparationContactAllowed = contactAllowed
+            };
+
+        var threeStep = CreateLegalCapturePoseLizard(profile);
+        if (threeStep is null)
+        {
+            detail = "legal-capture-pose=not-found";
+            return false;
+        }
+        threeStep.Update(
+            DeltaTime,
+            Input(CaptureProgress, contactAllowed: false));
+        var capturePose = BranchPoseSnapshot.Capture(threeStep);
+        var targetsAreReadable = Enumerable.Range(0, 4).All(index =>
+            Vector2.Distance(
+                threeStep.Legs[index].Foot,
+                threeStep.RegripContactTarget(index)) >= 14f - 0.001f);
+        var captureIsNonContact =
+            threeStep.RegripAnimationPhase == RegripAnimationPhase.Seeking &&
+            threeStep.RegripReachProgress <= 0.0001f &&
+            !threeStep.RegripContacted &&
+            threeStep.RegripContactLegMask == 0;
+
+        threeStep.Update(
+            DeltaTime,
+            Input(ExtensionProgress, contactAllowed: false));
+        var extensionPose = BranchPoseSnapshot.Capture(
+            threeStep,
+            capturePose.ArmLengths);
+        var extensionKeepsCapturedBranch = Enumerable.Range(0, 4).All(index =>
+            capturePose.BendSigns[index] == 0f ||
+            extensionPose.BendSigns[index] == 0f ||
+            capturePose.BendSigns[index] == extensionPose.BendSigns[index]);
+        var extensionIsNonContact =
+            threeStep.RegripAnimationPhase == RegripAnimationPhase.Seeking &&
+            threeStep.RegripReachProgress > 0f &&
+            threeStep.RegripReachProgress < 1f &&
+            !threeStep.RegripContacted &&
+            threeStep.RegripContactLegMask == 0;
+
+        threeStep.Update(
+            DeltaTime,
+            Input(SwitchProgress, contactAllowed: false));
+        var plateauPose = BranchPoseSnapshot.Capture(
+            threeStep,
+            capturePose.ArmLengths);
+        var transitionCount = 0;
+        var transitionsAreNarrow = true;
+        var minimumTransitionStraightness = float.PositiveInfinity;
+        var maximumTransitionElbowJump = 0f;
+        for (var index = 0; index < 4; index++)
+        {
+            if (extensionPose.BendSigns[index] == 0f ||
+                plateauPose.BendSigns[index] == 0f ||
+                extensionPose.BendSigns[index] == plateauPose.BendSigns[index])
+            {
+                continue;
+            }
+            transitionCount++;
+            var transitionStraightness = Math.Min(
+                extensionPose.Straightness[index],
+                plateauPose.Straightness[index]);
+            var elbowJump = Vector2.Distance(
+                extensionPose.Elbows[index],
+                plateauPose.Elbows[index]);
+            minimumTransitionStraightness = Math.Min(
+                minimumTransitionStraightness,
+                transitionStraightness);
+            maximumTransitionElbowJump = Math.Max(
+                maximumTransitionElbowJump,
+                elbowJump);
+            transitionsAreNarrow &=
+                LostGripRegripAnimationProbe
+                    .IsNearStraightIkBranchTransitionAllowed(
+                        transitionsBefore: 0,
+                        extensionPose.Straightness[index],
+                        plateauPose.Straightness[index],
+                        elbowJump);
+        }
+        var plateauIsNonContact =
+            threeStep.RegripAnimationPhase == RegripAnimationPhase.Seeking &&
+            threeStep.RegripReachProgress > 0f &&
+            threeStep.RegripReachProgress < 1f &&
+            !threeStep.RegripContacted &&
+            threeStep.RegripContactLegMask == 0 &&
+            LostGripRegripAnimationProbe.IsFourLimbBodyGeometrySafe(
+                threeStep,
+                out _,
+                out _);
+
+        threeStep.Update(DeltaTime, Input(1f, contactAllowed: true));
+        var targetPose = BranchPoseSnapshot.Capture(
+            threeStep,
+            capturePose.ArmLengths);
+        var targetContactIsAtomic =
+            threeStep.RegripAnimationPhase == RegripAnimationPhase.Seeking &&
+            threeStep.RegripReachProgress >= 1f - 0.0001f &&
+            threeStep.RegripContacted &&
+            threeStep.RegripContactLegMask == 0b1111 &&
+            Enumerable.Range(0, 4).All(index =>
+                Vector2.Distance(
+                    threeStep.Legs[index].Foot,
+                    threeStep.RegripContactTarget(index)) <= 0.25f) &&
+            Enumerable.Range(0, 4).All(index =>
+                plateauPose.BendSigns[index] == 0f ||
+                targetPose.BendSigns[index] == 0f ||
+                plateauPose.BendSigns[index] == targetPose.BendSigns[index]) &&
+            LostGripRegripAnimationProbe.IsFourLimbBodyGeometrySafe(
+                threeStep,
+                out _,
+                out _);
+
+        threeStep.Update(
+            DeltaTime,
+            new LizardAnimationInput(
+                0f,
+                0f,
+                LizardPoseMode.Regrip,
+                emotion,
+                0f,
+                Vector2.Zero)
+            {
+                CatchPreparationContactAllowed = true
+            });
+        var stationaryContactHold =
+            threeStep.RegripAnimationPhase == RegripAnimationPhase.ContactHold &&
+            threeStep.RegripContacted &&
+            threeStep.RegripContactLegMask == 0b1111;
+
+        var twoStep = CreateLegalCapturePoseLizard(profile);
+        if (twoStep is null)
+        {
+            detail = "two-step-legal-capture-pose=not-found";
+            return false;
+        }
+        twoStep.Update(
+            DeltaTime,
+            Input(CaptureProgress, contactAllowed: false));
+        twoStep.Update(DeltaTime, Input(1f, contactAllowed: true));
+        var twoStepEndpointJumpIsNonContact =
+            twoStep.RegripAnimationPhase == RegripAnimationPhase.Seeking &&
+            !twoStep.RegripContacted &&
+            twoStep.RegripContactLegMask == 0 &&
+            twoStep.RegripContactError > RegripPoseController.ContactTolerance;
+
+        detail =
+            $"capture={captureIsNonContact},targets={targetsAreReadable}," +
+            $"extension={extensionIsNonContact}," +
+            $"old-sign={extensionKeepsCapturedBranch}," +
+            $"switches={transitionCount},narrow={transitionsAreNarrow}," +
+            $"straight=" +
+            $"{(float.IsFinite(minimumTransitionStraightness) ? minimumTransitionStraightness : 0f):F5}," +
+            $"jump={maximumTransitionElbowJump:F4}," +
+            $"plateau={plateauIsNonContact}," +
+            $"target={targetContactIsAtomic},hold={stationaryContactHold}," +
+            $"two-step-noncontact={twoStepEndpointJumpIsNonContact}," +
+            $"two-step-error={twoStep.RegripContactError:F3}," +
+            $"two-step-mask={Convert.ToString(twoStep.RegripContactLegMask, 2)}";
+        return captureIsNonContact && targetsAreReadable &&
+               extensionIsNonContact && extensionKeepsCapturedBranch &&
+               transitionCount > 0 && transitionsAreNarrow &&
+               plateauIsNonContact && targetContactIsAtomic &&
+               stationaryContactHold && twoStepEndpointJumpIsNonContact;
+    }
+
+    private static bool RunRotatedHeadingFourPawGeometry(
+        LizardProfile profile,
+        out string failureDetail)
+    {
+        failureDetail = "pass";
+        var maximumNonBranchLimbJump = 0f;
+        var worstNonBranchLimbJumpDetail = "none";
+        var maximumProjectedLimbJump = 0f;
+        var worstProjectedLimbJumpDetail = "none";
+        var projectedLimbSamples = 0;
+        var rollbackLimbSamples = 0;
+        var emotion = EmotionBlend.Normalize(
+            new EmotionBlend(1f, 0f, 0f, 0f));
+        foreach (var heading in new[]
+                 {
+                     0f,
+                     MathF.PI * 0.5f,
+                     -MathF.PI * 0.5f,
+                     MathF.PI
+                 })
+        {
+            var headingDegrees = heading * 180f / MathF.PI;
+            var lizard = CreateLegalCapturePoseLizard(profile, heading);
+            var noReach = CreateLegalCapturePoseLizard(profile, heading);
+            if (lizard is null || noReach is null)
+            {
+                failureDetail =
+                    $"heading={headingDegrees:F0},stage=legal-capture-pose";
+                return false;
+            }
+            var freeFallInput = new LizardAnimationInput(
+                heading,
+                0f,
+                LizardPoseMode.FreeFall,
+                emotion,
+                0.6f,
+                new Vector2(0f, 1f));
+            lizard.Update(
+                DeltaTime,
+                freeFallInput with { CatchPreparationProgress = 0.05f });
+            noReach.Update(DeltaTime, freeFallInput);
+            var entryPoseJump = PoseSnapshot.Capture(lizard).MaximumDistance(
+                PoseSnapshot.Capture(noReach));
+            if (entryPoseJump > 0.0001f)
+            {
+                failureDetail =
+                    $"heading={headingDegrees:F0},stage=entry," +
+                    $"pose-jump={entryPoseJump:F4}";
+                return false;
+            }
+
+            var startFeet = new Vector2[4];
+            var startShoulders = new Vector2[4];
+            var startRadii = new float[4];
+            var armLengths = new float[4];
+            var upperLengths = new float[4];
+            var lowerLengths = new float[4];
+            var lastNonZeroBendSigns = new float[4];
+            var previousStraightness = new float[4];
+            var previousShoulders = new Vector2[4];
+            var previousElbows = new Vector2[4];
+            var previousFeet = new Vector2[4];
+            var branchTransitions = new int[4];
+            var targets = new Vector2[4];
+            var minimumTargetDisplacement = float.PositiveInfinity;
+            var minimumTargetUpwardTravel = float.PositiveInfinity;
+            for (var legIndex = 0; legIndex < 4; legIndex++)
+            {
+                var leg = lizard.Legs[legIndex];
+                startFeet[legIndex] = leg.Foot;
+                startShoulders[legIndex] = leg.Shoulder;
+                startRadii[legIndex] = Vector2.Distance(
+                    leg.Foot,
+                    leg.Shoulder);
+                armLengths[legIndex] =
+                    Vector2.Distance(leg.Shoulder, leg.Elbow) +
+                    Vector2.Distance(leg.Elbow, leg.Foot);
+                upperLengths[legIndex] =
+                    Vector2.Distance(leg.Shoulder, leg.Elbow);
+                lowerLengths[legIndex] =
+                    Vector2.Distance(leg.Elbow, leg.Foot);
+                previousStraightness[legIndex] =
+                    startRadii[legIndex] /
+                    Math.Max(armLengths[legIndex], 0.0001f);
+                previousShoulders[legIndex] = leg.Shoulder;
+                previousElbows[legIndex] = leg.Elbow;
+                previousFeet[legIndex] = leg.Foot;
+                targets[legIndex] = lizard.RegripContactTarget(legIndex);
+                minimumTargetDisplacement = Math.Min(
+                    minimumTargetDisplacement,
+                    Vector2.Distance(leg.Foot, targets[legIndex]));
+                minimumTargetUpwardTravel = Math.Min(
+                    minimumTargetUpwardTravel,
+                    leg.Foot.Y - targets[legIndex].Y);
+                var direction = MathEx.SafeNormalize(
+                    leg.Foot - leg.Shoulder,
+                    -Vector2.UnitY);
+                var bend = Vector2.Dot(
+                    leg.Elbow - leg.Shoulder,
+                    MathEx.Perpendicular(direction));
+                lastNonZeroBendSigns[legIndex] = MathF.Abs(bend) > 0.0001f
+                    ? MathF.Sign(bend)
+                    : DanglingTopology2D.GetSide(legIndex);
+                if (targets[legIndex].Y >= leg.Shoulder.Y - 0.0001f)
+                {
+                    failureDetail =
+                        $"heading={headingDegrees:F0},stage=target," +
+                        $"leg={legIndex},targetY={targets[legIndex].Y:F3}," +
+                        $"shoulderY={leg.Shoulder.Y:F3}";
+                    return false;
+                }
+            }
+            var captureContactSafe = lizard.RegripReachContactSafe;
+            var targetGeometryDetail = string.Join(
+                "/",
+                Enumerable.Range(0, 4).Select(index =>
+                {
+                    var leg = lizard.Legs[index];
+                    var targetElbow = SolveTwoBoneElbow(
+                        leg.Shoulder,
+                        targets[index],
+                        upperLengths[index],
+                        lowerLengths[index],
+                        -lastNonZeroBendSigns[index]);
+                    var safe = LostGripRegripAnimationProbe
+                        .IsLimbBodyGeometrySafe(
+                            lizard,
+                            index,
+                            leg.Shoulder,
+                            targetElbow,
+                            targets[index],
+                            out var clearance,
+                            out var reentries);
+                    var readable =
+                        Vector2.Distance(startFeet[index], targets[index]) >=
+                            14f - 0.0001f &&
+                        startFeet[index].Y - targets[index].Y >=
+                            1.1f - 0.0001f;
+                    var requiresProjection =
+                        (lizard.RegripReachRequiresProjectionLegMask &
+                         (1 << index)) != 0;
+                    return
+                        $"L{index}:d{Vector2.Distance(startFeet[index], targets[index]):F2}," +
+                        $"u{startFeet[index].Y - targets[index].Y:F2}," +
+                        $"read{readable},c{clearance:F2},r{reentries}," +
+                        $"endpoint{safe},requires-projection{requiresProjection}";
+                }));
+            if (minimumTargetDisplacement < 14f - 0.0001f ||
+                minimumTargetUpwardTravel < 1.1f - 0.0001f)
+            {
+                _ = LostGripRegripAnimationProbe.IsFourLimbBodyGeometrySafe(
+                    lizard,
+                    out var captureClearance,
+                    out var captureReentries);
+                failureDetail =
+                    $"heading={headingDegrees:F0},stage=capture-safe," +
+                    $"safe={captureContactSafe}," +
+                    $"disp={minimumTargetDisplacement:F3}," +
+                    $"up={minimumTargetUpwardTravel:F3}," +
+                    $"clearance={captureClearance:F3}," +
+                    $"reentries={captureReentries}," +
+                    $"targets={targetGeometryDetail}";
+                return false;
+            }
+            for (var first = 0; first < 4; first++)
+            {
+                for (var second = first + 1; second < 4; second++)
+                {
+                    if (Vector2.Distance(targets[first], targets[second]) <= 1f)
+                    {
+                        failureDetail =
+                            $"heading={headingDegrees:F0},stage=target-gap," +
+                            $"legs={first}/{second},gap=" +
+                            $"{Vector2.Distance(targets[first], targets[second]):F3}";
+                        return false;
+                    }
+                }
+            }
+
+            var displayOffsets = new[]
+            {
+                Enumerable.Range(0, 4)
+                    .Select(index => startFeet[index] - startShoulders[index])
+                    .ToArray(),
+                Enumerable.Range(0, 4)
+                    .Select(index => startFeet[index] - startShoulders[index])
+                    .ToArray()
+            };
+            var visibleDisplayFrames = new int[2];
+            var visibleDisplayFramesByLeg = new int[2, 4];
+            var cumulativeTargetAdvances = new float[4];
+            var minimumObservedPathClearance = float.PositiveInfinity;
+            var observedPathReentries = 0;
+            var headingRollbackLimbSamples = 0;
+            var stepTrace = new List<string>();
+
+            for (var reachStep = 1; reachStep <= 24; reachStep++)
+            {
+                var inputProgress = MathEx.Lerp(
+                    0.05f,
+                    1f,
+                    reachStep / 24f);
+                lizard.Update(
+                    DeltaTime,
+                    freeFallInput with
+                    {
+                        CatchPreparationProgress = inputProgress,
+                        CatchPreparationContactAllowed = false
+                    });
+                var requiresProjectionMask =
+                    lizard.RegripReachRequiresProjectionLegMask;
+                var projectedMask =
+                    lizard.RegripReachProjectedLegMaskThisStep;
+                var rollbackMask =
+                    lizard.RegripReachRollbackLegMaskThisStep;
+                projectedLimbSamples += BitOperations.PopCount(
+                    (uint)(projectedMask & 0b1111));
+                var stepRollbackLimbSamples = BitOperations.PopCount(
+                    (uint)(rollbackMask & 0b1111));
+                rollbackLimbSamples += stepRollbackLimbSamples;
+                headingRollbackLimbSamples += stepRollbackLimbSamples;
+                var elbowFrameDeltas = new float[4];
+                var footFrameDeltas = new float[4];
+                var branchTransitionFrame = new bool[4];
+                var oneStepTargetAdvances = new float[4];
+                if (!LostGripRegripAnimationProbe.IsFourLimbBodyGeometrySafe(
+                        lizard,
+                        out var minimumRemoteClearance,
+                        out var ownEnvelopeReentries))
+                {
+                    var branchDetail = string.Join(
+                        "/",
+                        Enumerable.Range(0, 4).Select(index =>
+                        {
+                            var leg = lizard.Legs[index];
+                            var sign = MeasureBendSign(leg);
+                            var straightness =
+                                Vector2.Distance(leg.Shoulder, leg.Foot) /
+                                Math.Max(armLengths[index], 0.0001f);
+                            var oppositeElbow = SolveTwoBoneElbow(
+                                leg.Shoulder,
+                                leg.Foot,
+                                upperLengths[index],
+                                lowerLengths[index],
+                                -lastNonZeroBendSigns[index]);
+                            var oppositeGap = Vector2.Distance(
+                                leg.Elbow,
+                                oppositeElbow);
+                            return
+                                $"L{index}:{lastNonZeroBendSigns[index]:F0}>" +
+                                $"{sign:F0},n{branchTransitions[index]}," +
+                                $"straight{previousStraightness[index]:F5}/" +
+                                $"{straightness:F5}," +
+                                $"frameJump" +
+                                $"{Vector2.Distance(previousElbows[index], leg.Elbow):F3}," +
+                                $"oppositeGap{oppositeGap:F3}," +
+                                $"readyProxy=" +
+                                $"{(straightness >= 0.99f && oppositeGap <= 0.75f)}";
+                        }));
+                    failureDetail =
+                        $"heading={headingDegrees:F0},stage=path," +
+                        $"step={reachStep},progress={lizard.RegripReachProgress:F4}," +
+                        $"clearance={minimumRemoteClearance:F3}," +
+                        $"reentries={ownEnvelopeReentries}," +
+                        $"geometry=" +
+                        LostGripRegripAnimationProbe
+                            .DescribeFourLimbBodyGeometry(lizard) +
+                        $",branch={branchDetail}";
+                    return false;
+                }
+                minimumObservedPathClearance = Math.Min(
+                    minimumObservedPathClearance,
+                    minimumRemoteClearance);
+                observedPathReentries += ownEnvelopeReentries;
+                for (var legIndex = 0; legIndex < 4; legIndex++)
+                {
+                    var leg = lizard.Legs[legIndex];
+                    var direction = MathEx.SafeNormalize(
+                        leg.Foot - leg.Shoulder,
+                        -Vector2.UnitY);
+                    var signedBend = Vector2.Dot(
+                        leg.Elbow - leg.Shoulder,
+                        MathEx.Perpendicular(direction));
+                    var currentBendSign = MathF.Abs(signedBend) > 0.0001f
+                        ? MathF.Sign(signedBend)
+                        : 0f;
+                    var currentStraightness =
+                        Vector2.Distance(leg.Foot, leg.Shoulder) /
+                        Math.Max(armLengths[legIndex], 0.0001f);
+                    var isBranchTransition =
+                        currentBendSign != 0f &&
+                        currentBendSign != lastNonZeroBendSigns[legIndex];
+                    branchTransitionFrame[legIndex] = isBranchTransition;
+                    elbowFrameDeltas[legIndex] = Vector2.Distance(
+                        previousElbows[legIndex] - previousShoulders[legIndex],
+                        leg.Elbow - leg.Shoulder);
+                    footFrameDeltas[legIndex] = Vector2.Distance(
+                        previousFeet[legIndex] - previousShoulders[legIndex],
+                        leg.Foot - leg.Shoulder);
+                    var previousFootOffset =
+                        previousFeet[legIndex] - previousShoulders[legIndex];
+                    var currentFootOffset = leg.Foot - leg.Shoulder;
+                    var targetOffset = targets[legIndex] - leg.Shoulder;
+                    oneStepTargetAdvances[legIndex] = Vector2.Dot(
+                        currentFootOffset - previousFootOffset,
+                        MathEx.SafeNormalize(
+                            targetOffset - previousFootOffset,
+                            -Vector2.UnitY));
+                    cumulativeTargetAdvances[legIndex] +=
+                        oneStepTargetAdvances[legIndex];
+                    if (!isBranchTransition)
+                    {
+                        var limbJump = Math.Max(
+                            elbowFrameDeltas[legIndex],
+                            footFrameDeltas[legIndex]);
+                        if (limbJump > maximumNonBranchLimbJump)
+                        {
+                            maximumNonBranchLimbJump = limbJump;
+                            worstNonBranchLimbJumpDetail =
+                                $"heading={headingDegrees:F0}," +
+                                $"step={reachStep},leg={legIndex}," +
+                                $"progress={lizard.RegripReachProgress:F4}," +
+                                $"elbow={elbowFrameDeltas[legIndex]:F4}," +
+                                $"foot={footFrameDeltas[legIndex]:F4}";
+                        }
+                    }
+                    if ((projectedMask & (1 << legIndex)) != 0)
+                    {
+                        var projectedJump = Math.Max(
+                            elbowFrameDeltas[legIndex],
+                            footFrameDeltas[legIndex]);
+                        if (projectedJump > maximumProjectedLimbJump)
+                        {
+                            maximumProjectedLimbJump = projectedJump;
+                            worstProjectedLimbJumpDetail =
+                                $"heading={headingDegrees:F0}," +
+                                $"step={reachStep},leg={legIndex}," +
+                                $"progress={lizard.RegripReachProgress:F4}," +
+                                $"elbow={elbowFrameDeltas[legIndex]:F4}," +
+                                $"foot={footFrameDeltas[legIndex]:F4}";
+                        }
+                        if (projectedJump >
+                            LostGripRegripAnimationProbe
+                                .MaximumProjectionLimbPoseJump + 0.0001f)
+                        {
+                            failureDetail =
+                                $"heading={headingDegrees:F0}," +
+                                $"stage=projection-continuity," +
+                                $"step={reachStep},leg={legIndex}," +
+                                $"jump={projectedJump:F4}," +
+                                $"requires={Convert.ToString(requiresProjectionMask, 2)}," +
+                                $"projected={Convert.ToString(projectedMask, 2)}," +
+                                $"rollback={Convert.ToString(rollbackMask, 2)}";
+                            return false;
+                        }
+                    }
+                    if (isBranchTransition)
+                    {
+                        var elbowJump = Vector2.Distance(
+                            previousElbows[legIndex],
+                            leg.Elbow);
+                        if (!LostGripRegripAnimationProbe
+                                .IsNearStraightIkBranchTransitionAllowed(
+                                    branchTransitions[legIndex],
+                                    previousStraightness[legIndex],
+                                    currentStraightness,
+                                    elbowJump))
+                        {
+                            failureDetail =
+                                $"heading={headingDegrees:F0},stage=branch," +
+                                $"step={reachStep},leg={legIndex}," +
+                                $"switch={branchTransitions[legIndex] + 1}," +
+                                $"straight=" +
+                                $"{Math.Min(previousStraightness[legIndex], currentStraightness):F5}," +
+                                $"elbow-jump={elbowJump:F4}";
+                            return false;
+                        }
+                        branchTransitions[legIndex]++;
+                        lastNonZeroBendSigns[legIndex] = currentBendSign;
+                    }
+                    var radiusRetention = Vector2.Distance(
+                        leg.Foot,
+                        leg.Shoulder) / Math.Max(startRadii[legIndex], 0.0001f);
+                    if (radiusRetention < 0.74f ||
+                        lizard.RegripContactTarget(legIndex).Y >=
+                            leg.Shoulder.Y - 0.0001f)
+                    {
+                        failureDetail =
+                            $"heading={headingDegrees:F0},stage=limb," +
+                            $"step={reachStep},leg={legIndex}," +
+                            $"bend={signedBend:F4},radius={radiusRetention:F4}," +
+                            $"targetY={lizard.RegripContactTarget(legIndex).Y:F3}," +
+                            $"shoulderY={leg.Shoulder.Y:F3}";
+                        return false;
+                    }
+                    previousStraightness[legIndex] = currentStraightness;
+                    previousShoulders[legIndex] = leg.Shoulder;
+                    previousElbows[legIndex] = leg.Elbow;
+                    previousFeet[legIndex] = leg.Foot;
+                }
+
+                var displayPhase = reachStep & 1;
+                var allPawsVisiblyAdvance = true;
+                var minimumDisplayDisplacement = float.PositiveInfinity;
+                var minimumDisplayAdvance = float.PositiveInfinity;
+                var minimumDisplayDisplacementLeg = -1;
+                var minimumDisplayAdvanceLeg = -1;
+                for (var legIndex = 0; legIndex < 4; legIndex++)
+                {
+                    var leg = lizard.Legs[legIndex];
+                    var previousOffset = displayOffsets[displayPhase][legIndex];
+                    var currentOffset = leg.Foot - leg.Shoulder;
+                    var delta = currentOffset - previousOffset;
+                    var targetRelative = targets[legIndex] - leg.Shoulder;
+                    var catchDirection = MathEx.SafeNormalize(
+                        targetRelative - previousOffset,
+                        -Vector2.UnitY);
+                    var displayDisplacement =
+                        delta.Length() * profile.Appearance.VisualScale;
+                    var displayAdvance =
+                        Vector2.Dot(delta, catchDirection) *
+                        profile.Appearance.VisualScale;
+                    if (displayDisplacement < minimumDisplayDisplacement)
+                    {
+                        minimumDisplayDisplacement = displayDisplacement;
+                        minimumDisplayDisplacementLeg = legIndex;
+                    }
+                    if (displayAdvance < minimumDisplayAdvance)
+                    {
+                        minimumDisplayAdvance = displayAdvance;
+                        minimumDisplayAdvanceLeg = legIndex;
+                    }
+                    var visiblyAdvances =
+                        displayDisplacement >= 0.5f &&
+                        displayAdvance >= 0.5f;
+                    allPawsVisiblyAdvance &= visiblyAdvances;
+                    if (visiblyAdvances)
+                    {
+                        visibleDisplayFramesByLeg[displayPhase, legIndex]++;
+                    }
+                    displayOffsets[displayPhase][legIndex] = currentOffset;
+                }
+                if (allPawsVisiblyAdvance)
+                {
+                    visibleDisplayFrames[displayPhase]++;
+                }
+                var heldLegs = string.Join(
+                    "",
+                    Enumerable.Range(0, 4)
+                        .Where(index =>
+                            elbowFrameDeltas[index] <= 0.001f &&
+                            footFrameDeltas[index] <= 0.001f));
+                stepTrace.Add(
+                    $"{reachStep}:p{lizard.RegripReachProgress:F3}," +
+                    $"s{(lizard.RegripReachContactSafe ? 1 : 0)}," +
+                    $"m{Convert.ToString(requiresProjectionMask, 16)}/" +
+                    $"{Convert.ToString(projectedMask, 16)}/" +
+                    $"{Convert.ToString(rollbackMask, 16)}," +
+                    $"h[{(heldLegs.Length == 0 ? "-" : heldLegs)}]," +
+                    $"e[{string.Join('/', elbowFrameDeltas.Select(value => value.ToString("F2")))}]," +
+                    $"f[{string.Join('/', footFrameDeltas.Select(value => value.ToString("F2")))}]," +
+                    $"b[{string.Join("", branchTransitionFrame.Select(value => value ? '1' : '0'))}]," +
+                    $"q{displayPhase}:dL{minimumDisplayDisplacementLeg}=" +
+                    $"{minimumDisplayDisplacement:F2},aL{minimumDisplayAdvanceLeg}=" +
+                    $"{minimumDisplayAdvance:F2}");
+            }
+
+            if (lizard.RegripReachProgress < 1f - 0.0001f ||
+                lizard.RegripContactError > 0.25f ||
+                lizard.RegripContacted ||
+                lizard.RegripContactLegMask != 0)
+            {
+                failureDetail =
+                    $"heading={headingDegrees:F0},stage=terminal-state," +
+                    $"progress={lizard.RegripReachProgress:F4}," +
+                    $"error={lizard.RegripContactError:F3}," +
+                    $"contacted={lizard.RegripContacted}," +
+                    $"mask={Convert.ToString(lizard.RegripContactLegMask, 2)}";
+                return false;
+            }
+            if (visibleDisplayFrames.Min() < 6)
+            {
+                var perLegFrames = string.Join(
+                    "/",
+                    Enumerable.Range(0, 4).Select(index =>
+                        $"L{index}:{visibleDisplayFramesByLeg[0, index]}/" +
+                        $"{visibleDisplayFramesByLeg[1, index]}"));
+                failureDetail =
+                    $"heading={headingDegrees:F0},stage=timing," +
+                    $"60hz-all={visibleDisplayFrames[0]}/" +
+                    $"{visibleDisplayFrames[1]},per-leg={perLegFrames}," +
+                    $"advance=[{string.Join('/', cumulativeTargetAdvances.Select(value => value.ToString("F3")))}]," +
+                    $"terminal-safe={lizard.RegripReachContactSafe}," +
+                    $"terminal-error={lizard.RegripContactError:F3}," +
+                    $"targets={targetGeometryDetail}," +
+                    $"trace={string.Join(';', stepTrace)}";
+                return false;
+            }
+            if (!captureContactSafe || !lizard.RegripReachContactSafe)
+            {
+                failureDetail =
+                    $"heading={headingDegrees:F0},stage=contact-safe," +
+                    $"capture={captureContactSafe}," +
+                    $"terminal={lizard.RegripReachContactSafe}," +
+                    $"actual-clearance={minimumObservedPathClearance:F3}," +
+                    $"actual-reentries={observedPathReentries}," +
+                    $"targets={targetGeometryDetail}";
+                return false;
+            }
+            if (headingRollbackLimbSamples != 0)
+            {
+                failureDetail =
+                    $"heading={headingDegrees:F0},stage=rollback," +
+                    $"count={headingRollbackLimbSamples}," +
+                    $"requires={Convert.ToString(lizard.RegripReachRequiresProjectionLegMask, 2)}," +
+                    $"projected-total={lizard.RegripReachProjectionCount}," +
+                    $"rollback-total={lizard.RegripReachRollbackCount}";
+                return false;
+            }
+
+            var terminalPose = PoseSnapshot.Capture(lizard);
+            lizard.Update(
+                DeltaTime,
+                freeFallInput with
+                {
+                    PoseMode = LizardPoseMode.Regrip,
+                    DropProgress = 0f,
+                    CatchPreparationProgress = 1f,
+                    CatchPreparationContactAllowed = true,
+                    ScreenDeltaModel = Vector2.Zero
+                });
+            var contactPoseJump = terminalPose.MaximumDistance(
+                PoseSnapshot.Capture(lizard));
+            if (lizard.RegripAnimationPhase != RegripAnimationPhase.ContactHold ||
+                !lizard.RegripContacted ||
+                lizard.RegripContactLegMask != 0b1111 ||
+                lizard.RegripContactError > 0.25f ||
+                contactPoseJump > 0.01f)
+            {
+                failureDetail =
+                    $"heading={headingDegrees:F0},stage=contact," +
+                    $"phase={lizard.RegripAnimationPhase}," +
+                    $"mask={Convert.ToString(lizard.RegripContactLegMask, 2)}," +
+                    $"error={lizard.RegripContactError:F3}," +
+                    $"jump={contactPoseJump:F4}";
+                return false;
+            }
+        }
+        failureDetail =
+            $"pass,max-nonbranch-limb-jump={maximumNonBranchLimbJump:F4}," +
+            $"worst-nonbranch={worstNonBranchLimbJumpDetail}," +
+            $"projected/rollback={projectedLimbSamples}/" +
+            $"{rollbackLimbSamples}," +
+            $"max-projected-jump={maximumProjectedLimbJump:F4}," +
+            $"worst-projected={worstProjectedLimbJumpDetail}";
+        return true;
+    }
+
+    private static bool RunContactSafeNegativeContract(
+        LizardProfile profile,
+        out string detail)
+    {
+        var source = CreateLegalCapturePoseLizard(profile);
+        if (source is null)
+        {
+            detail = "setup-failed";
+            return false;
+        }
+
+        var unsafeProfile = profile with
+        {
+            Appearance = profile.Appearance with { LimbWidth = 160f }
+        };
+        var lizard = new ProceduralLizard(unsafeProfile);
+        lizard.Spine.SetPose(source.Spine.Joints.ToArray());
+        for (var index = 0; index < 4; index++)
+        {
+            var leg = source.Legs[index];
+            lizard.Legs[index].SetDanglingPose(
+                leg.Shoulder,
+                leg.Elbow,
+                leg.Foot);
+        }
+
+        var emotion = EmotionBlend.Normalize(
+            new EmotionBlend(1f, 0f, 0f, 0f));
+        var input = new LizardAnimationInput(
+            0f,
+            0f,
+            LizardPoseMode.FreeFall,
+            emotion,
+            0.85f,
+            new Vector2(0f, 1f));
+        lizard.Update(
+            DeltaTime,
+            input with
+            {
+                CatchPreparationProgress = 0.1f,
+                CatchPreparationContactAllowed = false
+            });
+        var captureSafe = lizard.RegripReachContactSafe;
+        var captureMask = lizard.RegripContactLegMask;
+        var captureContacted = lizard.RegripContacted;
+        var unsafeGeometryObserved =
+            !LostGripRegripAnimationProbe.IsFourLimbBodyGeometrySafe(
+                lizard,
+                out var captureClearance,
+                out var captureReentries);
+
+        foreach (var progress in new[] { 0.307f, 0.37f, 0.99995f })
+        {
+            lizard.Update(
+                DeltaTime,
+                input with
+                {
+                    CatchPreparationProgress = progress,
+                    CatchPreparationContactAllowed = true
+                });
+        }
+        var terminalSafe = lizard.RegripReachContactSafe;
+        var terminalMask = lizard.RegripContactLegMask;
+        var terminalContacted = lizard.RegripContacted;
+        lizard.Update(
+            DeltaTime,
+            input with
+            {
+                PoseMode = LizardPoseMode.Regrip,
+                DropProgress = 0f,
+                CatchPreparationProgress = 1f,
+                CatchPreparationContactAllowed = true,
+                ScreenDeltaModel = Vector2.Zero
+            });
+
+        detail =
+            $"capture-safe={captureSafe},geometry-unsafe=" +
+            $"{unsafeGeometryObserved},clearance={captureClearance:F3}," +
+            $"reentries={captureReentries},capture-mask=" +
+            $"{Convert.ToString(captureMask, 2)}," +
+            $"capture-contacted={captureContacted},terminal-safe=" +
+            $"{terminalSafe},terminal-mask=" +
+            $"{Convert.ToString(terminalMask, 2)}," +
+            $"terminal-contacted={terminalContacted},after-phase=" +
+            $"{lizard.RegripAnimationPhase},after-mask=" +
+            $"{Convert.ToString(lizard.RegripContactLegMask, 2)}," +
+            $"after-contacted={lizard.RegripContacted}," +
+            $"rollback={lizard.RegripReachRollbackCount}";
+        return unsafeGeometryObserved &&
+               !captureSafe &&
+               captureMask == 0 &&
+               !captureContacted &&
+               !terminalSafe &&
+               terminalMask == 0 &&
+               !terminalContacted &&
+               lizard.RegripAnimationPhase == RegripAnimationPhase.None &&
+               lizard.RegripContactLegMask == 0 &&
+               !lizard.RegripContacted &&
+               lizard.Spine.Joints.All(IsFinite) &&
+               lizard.Legs.All(leg =>
+                   IsFinite(leg.Shoulder) &&
+                   IsFinite(leg.Elbow) &&
+                   IsFinite(leg.Foot));
+    }
+
+    private static bool RunDpiRefreshDeterminism(LizardProfile profile)
+    {
+        try
+        {
+            var scenarios = new[] { 1d, 1.25d, 1.5d, 2d }
+                .SelectMany(scale => new[] { 60, 120, 240 }
+                    .Select(rate => new DpiCadenceScenario(profile, scale, rate)))
+                .ToArray();
+
+            foreach (var scenario in scenarios)
+            {
+                scenario.AdvanceForCommonTicks(180);
+                scenario.Runtime.MoveTo(new Vector2(
+                    scenario.NavigationArea.Center.X,
+                    scenario.NavigationArea.Top + 2f));
+                if (!scenario.Module.DebugBridge
+                        .TryPlay(PortableDebugAction.LostGripFall)
+                        .Accepted)
+                {
+                    return false;
+                }
+            }
+
+            var partialReachSeen = false;
+            var reachedTargetSeen = false;
+            for (var commonTick = 0; commonTick < 600; commonTick++)
+            {
+                foreach (var scenario in scenarios)
+                {
+                    scenario.AdvanceForCommonTicks(1);
+                }
+
+                var baseline = scenarios[0];
+                for (var index = 1; index < scenarios.Length; index++)
+                {
+                    if (Vector2.Distance(
+                            baseline.Runtime.Position,
+                            scenarios[index].Runtime.Position) > 0.0001f ||
+                        !RenderFramesNear(
+                            baseline.Runtime.CurrentSnapshot,
+                            scenarios[index].Runtime.CurrentSnapshot,
+                            0.0001f))
+                    {
+                        return false;
+                    }
+                }
+
+                if (!baseline.Module.DebugBridge.TryCapture(out var snapshot))
+                {
+                    return false;
+                }
+                partialReachSeen |=
+                    snapshot.LostGripPhase ==
+                        PortableDebugLostGripPhase.Falling &&
+                    snapshot.LostGripReachProgress is > 0f and < 1f;
+                reachedTargetSeen |=
+                    snapshot.LostGripPhase ==
+                        PortableDebugLostGripPhase.Regripping &&
+                    snapshot.LostGripCatchReason ==
+                        PortableDebugLostGripCatchReason.ReachedTarget;
+                if (partialReachSeen && reachedTargetSeen &&
+                    snapshot.LostGripRegripProgress > 0f)
+                {
+                    return true;
+                }
+            }
+            return false;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static bool RenderFramesNear(
+        LizardRenderFrame expected,
+        LizardRenderFrame actual,
+        float tolerance)
+    {
+        if (expected.BodyOutline.Length != actual.BodyOutline.Length ||
+            expected.Legs.Length != actual.Legs.Length)
+        {
+            return false;
+        }
+        for (var index = 0; index < expected.BodyOutline.Length; index++)
+        {
+            if (Vector2.Distance(
+                    expected.BodyOutline[index],
+                    actual.BodyOutline[index]) > tolerance)
+            {
+                return false;
+            }
+        }
+        for (var index = 0; index < expected.Legs.Length; index++)
+        {
+            if (Vector2.Distance(
+                    expected.Legs[index].Shoulder,
+                    actual.Legs[index].Shoulder) > tolerance ||
+                Vector2.Distance(
+                    expected.Legs[index].Elbow,
+                    actual.Legs[index].Elbow) > tolerance ||
+                Vector2.Distance(
+                    expected.Legs[index].Foot,
+                    actual.Legs[index].Foot) > tolerance)
+            {
+                return false;
+            }
+        }
+        return Vector2.Distance(expected.HeadNose, actual.HeadNose) <= tolerance &&
+               Vector2.Distance(
+                   expected.NegativeEyeCenter,
+                   actual.NegativeEyeCenter) <= tolerance &&
+               Vector2.Distance(
+                   expected.PositiveEyeCenter,
+                   actual.PositiveEyeCenter) <= tolerance &&
+               MathF.Abs(expected.Heading - actual.Heading) <= tolerance &&
+               MathF.Abs(expected.BlinkAmount - actual.BlinkAmount) <= tolerance;
+    }
+
+    private static SafetyLossFallbackResult RunMidSeekingSafetyLossFallback(
+        LizardProfile profile,
+        ScreenContext screen)
+    {
+        const float ForcedHostShift = 8f;
+        const float PartialReachMinimum = 0.25f;
+        const float PartialReachMaximum = 0.75f;
+        var safeArea = screen.LostGripSafety.SafeArea;
+        var start = new Vector2(safeArea.Center.X, safeArea.Top + 2f);
+        var session = CreateDebugPlaybackSession(
+            profile,
+            screen.NavigationArea,
+            screen.LostGripSafety,
+            start,
+            0x67D5);
+        var started = session.TryPlayDebugAction(
+            AutonomousAction.LostGripFall,
+            screen.NavigationArea,
+            screen.LostGripSafety);
+        if (started.Status != DebugPlaybackStatus.Started)
+        {
+            return SafetyLossFallbackResult.Failed;
+        }
+
+        var behavior = session.BehaviorForDiagnostics;
+        var lizard = session.LizardForDiagnostics;
+        var foundPartialSeeking = false;
+        var lastNonZeroBendSigns = new float[4];
+        for (var step = 0; step < 8f / DeltaTime; step++)
+        {
+            session.Advance(Input(
+                DeltaTime,
+                screen.NavigationArea,
+                profile,
+                lostGripSafety: screen.LostGripSafety));
+            if (lizard.RegripAnimationPhase == RegripAnimationPhase.Seeking)
+            {
+                _ = CountAndUpdateBendSignTransitions(
+                    lizard,
+                    lastNonZeroBendSigns);
+            }
+            if (behavior.LostGripPhase == LostGripFallPhase.Falling &&
+                lizard.RegripAnimationPhase == RegripAnimationPhase.Seeking &&
+                lizard.RegripReachProgress >= PartialReachMinimum &&
+                lizard.RegripReachProgress <= PartialReachMaximum &&
+                !lizard.RegripContacted &&
+                lizard.RegripContactLegMask == 0)
+            {
+                foundPartialSeeking = true;
+                break;
+            }
+        }
+        if (!foundPartialSeeking)
+        {
+            return SafetyLossFallbackResult.Failed;
+        }
+
+        var previousPosition = behavior.Position;
+        var previousPose = PoseSnapshot.Capture(lizard);
+        var previousReachProgress = lizard.RegripReachProgress;
+        var forcedLeft = previousPosition.X + ForcedHostShift;
+        if (forcedLeft >= safeArea.Right - 1f)
+        {
+            return SafetyLossFallbackResult.Failed;
+        }
+        var unavailableSafety = new LostGripSafetyContext(
+            new FloatRect(
+                forcedLeft,
+                safeArea.Top,
+                safeArea.Right,
+                safeArea.Bottom),
+            IsAvailable: false);
+
+        var maximumPoseJump = 0f;
+        var minimumBoundaryMargin = float.PositiveInfinity;
+        var fakeContactSamples = 0;
+        var branchTransitionsAfterTrigger = 0;
+        var finiteAndBounded = true;
+
+        var movingFallbackFrame = session.Advance(Input(
+            DeltaTime,
+            screen.NavigationArea,
+            profile,
+            lostGripSafety: unavailableSafety));
+        ObserveFallbackFrame(movingFallbackFrame);
+        var partialMovingFallback =
+            behavior.LostGripPhase == LostGripFallPhase.Regripping &&
+            behavior.LostGripCatchReason == LostGripCatchReason.SafetyForced &&
+            behavior.Position.X >= forcedLeft - 0.001f &&
+            Vector2.Distance(previousPosition, behavior.Position) > 0.001f &&
+            lizard.CurrentPoseMode == LizardPoseMode.FreeFall &&
+            lizard.RegripAnimationPhase == RegripAnimationPhase.Seeking &&
+            lizard.RegripReachActive &&
+            lizard.RegripReachProgress > 0f &&
+            lizard.RegripReachProgress < 1f - 0.0001f &&
+            lizard.RegripReachProgress <= previousReachProgress + 0.08f &&
+            !lizard.RegripContacted &&
+            lizard.RegripContactLegMask == 0;
+
+        var stationaryFallbackFrame = session.Advance(Input(
+            DeltaTime,
+            screen.NavigationArea,
+            profile,
+            lostGripSafety: unavailableSafety));
+        ObserveFallbackFrame(stationaryFallbackFrame);
+        var continuousNonContactFallback =
+            behavior.LostGripPhase == LostGripFallPhase.Regripping &&
+            behavior.LostGripCatchReason == LostGripCatchReason.SafetyForced &&
+            lizard.CurrentPoseMode == LizardPoseMode.Regrip &&
+            lizard.RegripAnimationPhase == RegripAnimationPhase.None &&
+            !lizard.RegripReachActive &&
+            lizard.RegripReachProgress == 0f &&
+            !lizard.RegripContacted &&
+            lizard.RegripContactLegMask == 0 &&
+            !lizard.CaptureDebugSnapshot().DanglingActive;
+
+        var recovered = false;
+        for (var step = 0; step < 2f / DeltaTime; step++)
+        {
+            var frame = session.Advance(Input(
+                DeltaTime,
+                screen.NavigationArea,
+                profile,
+                lostGripSafety: unavailableSafety));
+            ObserveFallbackFrame(frame);
+            if (behavior.State == RoamingState.Idle &&
+                behavior.LostGripPhase == LostGripFallPhase.None &&
+                lizard.RegripAnimationPhase == RegripAnimationPhase.None)
+            {
+                recovered = true;
+                break;
+            }
+        }
+
+        if (!float.IsFinite(minimumBoundaryMargin))
+        {
+            minimumBoundaryMargin = float.NegativeInfinity;
+        }
+        var passed =
+            partialMovingFallback &&
+            continuousNonContactFallback &&
+            recovered &&
+            finiteAndBounded &&
+            maximumPoseJump <= 3f &&
+            minimumBoundaryMargin >= -0.001f &&
+            fakeContactSamples == 0 &&
+            branchTransitionsAfterTrigger == 0;
+        return new SafetyLossFallbackResult(
+            passed,
+            maximumPoseJump,
+            minimumBoundaryMargin,
+            fakeContactSamples,
+            branchTransitionsAfterTrigger,
+            $"partial-moving={partialMovingFallback}," +
+            $"continuous={continuousNonContactFallback}," +
+            $"recovered={recovered},finite={finiteAndBounded}," +
+            $"jump={maximumPoseJump:F4},margin={minimumBoundaryMargin:F3}," +
+            $"fake={fakeContactSamples}," +
+            $"post-trigger-switches={branchTransitionsAfterTrigger}");
+
+        void ObserveFallbackFrame(PetSimulationFrameOutput frame)
+        {
+            var pose = PoseSnapshot.Capture(lizard);
+            maximumPoseJump = Math.Max(
+                maximumPoseJump,
+                previousPose.MaximumDistance(pose));
+            previousPose = pose;
+            if (lizard.RegripAnimationPhase == RegripAnimationPhase.Seeking)
+            {
+                branchTransitionsAfterTrigger +=
+                    CountAndUpdateBendSignTransitions(
+                        lizard,
+                        lastNonZeroBendSigns);
+            }
+
+            var drawableMargin = MeasureDrawableMargins(
+                profile,
+                screen.WorkArea,
+                behavior.Position,
+                frame.RenderFrame).Screen;
+            var hostMargin = Math.Min(
+                Math.Min(
+                    behavior.Position.X - screen.FullRenderRadius -
+                    screen.WorkArea.Left,
+                    screen.WorkArea.Right - behavior.Position.X -
+                    screen.FullRenderRadius),
+                Math.Min(
+                    behavior.Position.Y - screen.FullRenderRadius -
+                    screen.WorkArea.Top,
+                    screen.WorkArea.Bottom - behavior.Position.Y -
+                    screen.FullRenderRadius));
+            minimumBoundaryMargin = Math.Min(
+                minimumBoundaryMargin,
+                Math.Min(drawableMargin, hostMargin));
+            if (lizard.RegripAnimationPhase == RegripAnimationPhase.ContactHold ||
+                lizard.RegripContacted ||
+                lizard.RegripContactLegMask != 0)
+            {
+                fakeContactSamples++;
+            }
+            finiteAndBounded &=
+                screen.NavigationArea.Contains(behavior.Position) &&
+                IsFinite(session) &&
+                drawableMargin >= -0.001f &&
+                hostMargin >= -0.001f;
+        }
+    }
+
+    private static bool RunNearCompleteSafetyContactGate(LizardProfile profile)
+    {
+        var lizard = CreateLegalCapturePoseLizard(profile);
+        if (lizard is null)
+        {
+            return false;
+        }
+        var neutralEmotion = EmotionBlend.Normalize(
+            new EmotionBlend(1f, 0f, 0f, 0f));
+        lizard.Update(
+            DeltaTime,
+            new LizardAnimationInput(
+                0f,
+                0f,
+                LizardPoseMode.FreeFall,
+                neutralEmotion,
+                0.85f,
+                new Vector2(0f, 1f))
+            {
+                CatchPreparationProgress = 0.1f,
+                CatchPreparationContactAllowed = false
+            });
+        lizard.Update(
+            DeltaTime,
+            new LizardAnimationInput(
+                0f,
+                0f,
+                LizardPoseMode.FreeFall,
+                neutralEmotion,
+                0.88f,
+                new Vector2(0f, 1f))
+            {
+                CatchPreparationProgress = 0.307f,
+                CatchPreparationContactAllowed = false
+            });
+        lizard.Update(
+            DeltaTime,
+            new LizardAnimationInput(
+                0f,
+                0f,
+                LizardPoseMode.FreeFall,
+                neutralEmotion,
+                0.89f,
+                new Vector2(0f, 1f))
+            {
+                CatchPreparationProgress = 0.37f,
+                CatchPreparationContactAllowed = false
+            });
+        lizard.Update(
+            DeltaTime,
+            new LizardAnimationInput(
+                0f,
+                0f,
+                LizardPoseMode.FreeFall,
+                neutralEmotion,
+                0.9f,
+                new Vector2(0f, 1f))
+            {
+                CatchPreparationProgress = 0.99995f,
+                CatchPreparationContactAllowed = false
+            });
+        var preparedInsideCompletionEpsilon =
+            lizard.RegripReachActive &&
+            lizard.RegripReachProgress >= 1f - 0.0001f &&
+            lizard.RegripContactError <= 0.25f &&
+            !lizard.RegripContacted &&
+            lizard.RegripContactLegMask == 0;
+
+        lizard.Update(
+            DeltaTime,
+            new LizardAnimationInput(
+                0f,
+                0f,
+                LizardPoseMode.Regrip,
+                neutralEmotion,
+                0f,
+                Vector2.Zero));
+        return preparedInsideCompletionEpsilon &&
+               lizard.RegripAnimationPhase == RegripAnimationPhase.None &&
+               !lizard.RegripContacted &&
+               lizard.RegripContactLegMask == 0;
+    }
+
+    private static bool RunNearCompleteReachedTargetContactGate(
+        LizardProfile profile)
+    {
+        var lizard = CreateLegalCapturePoseLizard(profile);
+        if (lizard is null)
+        {
+            return false;
+        }
+        var neutralEmotion = EmotionBlend.Normalize(
+            new EmotionBlend(1f, 0f, 0f, 0f));
+        lizard.Update(
+            DeltaTime,
+            new LizardAnimationInput(
+                0f,
+                0f,
+                LizardPoseMode.FreeFall,
+                neutralEmotion,
+                0.85f,
+                new Vector2(0f, 1f))
+            {
+                CatchPreparationProgress = 0.1f
+            });
+        lizard.Update(
+            DeltaTime,
+            new LizardAnimationInput(
+                0f,
+                0f,
+                LizardPoseMode.FreeFall,
+                neutralEmotion,
+                0.88f,
+                new Vector2(0f, 1f))
+            {
+                CatchPreparationProgress = 0.307f
+            });
+        lizard.Update(
+            DeltaTime,
+            new LizardAnimationInput(
+                0f,
+                0f,
+                LizardPoseMode.FreeFall,
+                neutralEmotion,
+                0.89f,
+                new Vector2(0f, 1f))
+            {
+                CatchPreparationProgress = 0.37f
+            });
+        lizard.Update(
+            DeltaTime,
+            new LizardAnimationInput(
+                0f,
+                0f,
+                LizardPoseMode.FreeFall,
+                neutralEmotion,
+                0.9f,
+                new Vector2(0f, 1f))
+            {
+                CatchPreparationProgress = 0.99995f
+            });
+        var preparedInsideCompletionEpsilon =
+            lizard.RegripReachActive &&
+            lizard.RegripReachProgress >= 1f - 0.0001f &&
+            lizard.RegripContactError <= 0.25f &&
+            !lizard.RegripContacted;
+
+        lizard.Update(
+            DeltaTime,
+            new LizardAnimationInput(
+                0f,
+                0f,
+                LizardPoseMode.Regrip,
+                neutralEmotion,
+                0f,
+                Vector2.Zero)
+            {
+                CatchPreparationContactAllowed = true
+            });
+        return preparedInsideCompletionEpsilon &&
+               lizard.RegripAnimationPhase ==
+               RegripAnimationPhase.ContactHold &&
+               lizard.RegripContacted &&
+               lizard.RegripContactLegMask == 0b1111 &&
+               Enumerable.Range(0, 4).All(index =>
+                   Vector2.Distance(
+                       lizard.Legs[index].Foot,
+                       lizard.RegripContactTarget(index)) <= 0.25f);
+    }
+
     private static bool RunPausePriority(LizardProfile profile, ScreenContext screen)
     {
         var session = CreateEnteredSession(profile, screen, 0x4FA7);
@@ -700,7 +2578,7 @@ internal static class LostGripFallSelfTest
         return null;
     }
 
-    private static void ObserveSafety(
+    private static Vector2 ObserveSafety(
         LizardProfile profile,
         ScreenContext screen,
         BehaviorController behavior,
@@ -712,6 +2590,7 @@ internal static class LostGripFallSelfTest
         {
             metrics.NavigationBoundaryViolations++;
         }
+        var visualCenter = behavior.Position;
         if (behavior.State == RoamingState.LostGripFall)
         {
             var safeBottom = screen.NavigationArea.Bottom -
@@ -736,6 +2615,7 @@ internal static class LostGripFallSelfTest
             metrics.MinimumVisualMargin = Math.Min(
                 metrics.MinimumVisualMargin,
                 drawableMargins.Screen);
+            visualCenter = drawableMargins.Center;
             if (drawableMargins.Screen < -0.001f)
             {
                 metrics.VisualBoundaryViolations++;
@@ -749,9 +2629,10 @@ internal static class LostGripFallSelfTest
         {
             metrics.NonFiniteSamples++;
         }
+        return visualCenter;
     }
 
-    private static (float Canvas, float Screen) MeasureDrawableMargins(
+    private static (float Canvas, float Screen, Vector2 Center) MeasureDrawableMargins(
         LizardProfile profile,
         FloatRect workArea,
         Vector2 hostCenter,
@@ -766,6 +2647,8 @@ internal static class LostGripFallSelfTest
             rendering.ShadowOffsetY);
         var minimumCanvasMargin = float.PositiveInfinity;
         var minimumScreenMargin = float.PositiveInfinity;
+        var minimumModel = new Vector2(float.PositiveInfinity);
+        var maximumModel = new Vector2(float.NegativeInfinity);
 
         foreach (var point in frame.BodyOutline)
         {
@@ -806,13 +2689,21 @@ internal static class LostGripFallSelfTest
 
         return (
             minimumCanvasMargin - DrawableRasterMargin,
-            minimumScreenMargin - DrawableRasterMargin * scale);
+            minimumScreenMargin - DrawableRasterMargin * scale,
+            hostCenter +
+            ((minimumModel + maximumModel) * 0.5f - new Vector2(canvasCenter)) * scale);
 
         void Include(Vector2 modelPoint, float modelRadius)
         {
             var screenPoint = hostCenter +
                               (modelPoint - new Vector2(canvasCenter)) * scale;
             var radius = modelRadius * scale;
+            minimumModel = Vector2.Min(
+                minimumModel,
+                modelPoint - new Vector2(modelRadius));
+            maximumModel = Vector2.Max(
+                maximumModel,
+                modelPoint + new Vector2(modelRadius));
             minimumCanvasMargin = Math.Min(
                 minimumCanvasMargin,
                 Math.Min(
@@ -961,6 +2852,7 @@ internal static class LostGripFallSelfTest
         float.IsFinite(behavior.Heading) &&
         float.IsFinite(behavior.Speed) &&
         float.IsFinite(behavior.LostGripFallProgress) &&
+        float.IsFinite(behavior.LostGripReachProgress) &&
         float.IsFinite(behavior.LostGripRegripProgress) &&
         float.IsFinite(behavior.LostGripVerticalVelocity) &&
         float.IsFinite(behavior.LostGripDistance) &&
@@ -970,6 +2862,11 @@ internal static class LostGripFallSelfTest
         float.IsFinite(lizard.FreeFallReferenceCorrectionTotal) &&
         float.IsFinite(lizard.FreeFallReferenceCorrectionMaximum) &&
         float.IsFinite(lizard.FreeFallReferenceCenterError) &&
+        float.IsFinite(lizard.RegripReachProgress) &&
+        Enumerable.Range(0, 4).All(index =>
+            IsFinite(lizard.RegripContactTarget(index))) &&
+        float.IsFinite(lizard.RegripContactError) &&
+        float.IsFinite(lizard.RegripContactSpineDrift) &&
         lizard.Spine.Joints.All(IsFinite) &&
         lizard.Legs.All(leg => IsFinite(leg.Elbow) && IsFinite(leg.Foot));
 
@@ -1000,6 +2897,82 @@ internal static class LostGripFallSelfTest
             .AddMetric("maximum_reference_correction_total", value.MaximumReferenceCorrectionTotal, "model px")
             .AddMetric("maximum_reference_correction", value.MaximumReferenceCorrection, "model px")
             .AddMetric("maximum_reference_center_error", value.MaximumReferenceCenterError, "model px")
+            .AddMetric("reach_seeking_entries", value.ReachSeekingEntries)
+            .AddMetric("contact_hold_entries", value.ContactHoldEntries)
+            .AddMetric("reach_ordering_violations", value.ReachOrderingViolations)
+            .AddMetric("reach_direction_violations", value.ReachDirectionViolations)
+            .AddMetric("reach_ik_branch_violations", value.ReachIkBranchViolations)
+            .AddMetric("reach_ik_branch_transitions", value.ReachIkBranchTransitions)
+            .AddMetric(
+                "minimum_ik_branch_transition_straightness",
+                value.MinimumIkBranchTransitionStraightness)
+            .AddMetric(
+                "maximum_ik_branch_transition_elbow_jump",
+                value.MaximumIkBranchTransitionElbowJump,
+                "model px")
+            .AddMetric(
+                "maximum_non_branch_limb_pose_jump",
+                value.MaximumNonBranchLimbPoseJump,
+                "model px")
+            .AddMetric(
+                "reach_requires_projection_leg_mask",
+                value.ReachRequiresProjectionLegMask)
+            .AddMetric(
+                "reach_projected_limb_samples",
+                value.ReachProjectedLimbSamples)
+            .AddMetric(
+                "reach_rollback_limb_samples",
+                value.ReachRollbackLimbSamples)
+            .AddMetric(
+                "reach_projection_continuity_violations",
+                value.ReachProjectionContinuityViolations)
+            .AddMetric(
+                "maximum_projection_limb_pose_jump",
+                value.MaximumProjectionLimbPoseJump,
+                "model px")
+            .AddMetric("reach_body_clearance_violations", value.ReachBodyClearanceViolations)
+            .AddMetric("reach_own_envelope_reentry_violations", value.ReachOwnEnvelopeReentryViolations)
+            .AddMetric("contact_stop_violations", value.ContactStopViolations)
+            .AddMetric("four_target_scenarios", value.FourTargetScenarios)
+            .AddMetric("four_leg_observed_scenarios", value.FourLegObservedScenarios)
+            .AddMetric("minimum_nonzero_seeking_steps", value.MinimumNonZeroSeekingSteps)
+            .AddMetric("minimum_behavior_reach_peak", value.MinimumBehaviorReachPeak)
+            .AddMetric("minimum_reach_target_error_reduction", value.MinimumReachTargetErrorReduction, "model px")
+            .AddMetric("minimum_foot_upward_travel", value.MinimumFootUpwardTravel, "model px")
+            .AddMetric("minimum_paw_catch_direction_travel", value.MinimumPawCatchDirectionTravel, "model px")
+            .AddMetric("minimum_arm_radius_retention", value.MinimumArmRadiusRetention)
+            .AddMetric("maximum_first_visible_arm_retraction", value.MaximumFirstVisibleArmRetraction, "screen px")
+            .AddMetric("minimum_front_headward_target_travel", value.MinimumFrontHeadwardTargetTravel, "model px")
+            .AddMetric("minimum_rear_tailward_target_travel", value.MinimumRearTailwardTargetTravel, "model px")
+            .AddMetric("minimum_target_separation", value.MinimumTargetSeparation, "model px")
+            .AddMetric("minimum_non_owned_body_clearance", value.MinimumNonOwnedBodyClearance, "model px")
+            .AddMetric("maximum_reach_entry_pose_jump", value.MaximumReachEntryPoseJump, "model px")
+            .AddMetric("maximum_terminal_reach_error", value.MaximumTerminalReachError, "model px")
+            .AddMetric("maximum_contact_error", value.MaximumContactError, "model px")
+            .AddMetric("maximum_contact_spine_drift", value.MaximumContactSpineDrift, "model px")
+            .AddMetric("maximum_post_contact_window_drift", value.MaximumPostContactWindowDrift, "screen px")
+            .AddMetric("maximum_post_contact_visual_centroid_drift", value.MaximumPostContactVisualCentroidDrift, "screen px")
+            .AddMetric("minimum_recorded_lost_grip_steps", value.MinimumRecordedLostGripSteps)
+            .AddMetric("minimum_moving_visible_paw_steps", value.MinimumMovingVisiblePawSteps)
+            .AddMetric("minimum_visible_paw_motion_lead_steps", value.MinimumVisiblePawMotionLeadSteps)
+            .AddMetric("minimum_moving_visible_paw_display_frames_60hz", value.MinimumMovingVisiblePawDisplayFrames60Hz)
+            .AddMetric("minimum_visible_paw_motion_lead_display_frames_60hz", value.MinimumVisiblePawMotionLeadDisplayFrames60Hz)
+            .AddMetric("pre_stop_paw_motion_violations", value.PreStopPawMotionViolations)
+            .AddMetric(
+                "capture_step_timing_median",
+                value.CaptureStepTimingMedianMilliseconds,
+                "ms")
+            .AddMetric(
+                "capture_step_timing_maximum",
+                value.CaptureStepTimingMaximumMilliseconds,
+                "ms")
+            .AddMetric("real_grab_maximum_error", value.RealGrabMaximumError, "model px")
+            .AddMetric("maximum_safety_loss_pose_jump", value.MaximumSafetyLossPoseJump, "model px")
+            .AddMetric("minimum_safety_loss_boundary_margin", value.MinimumSafetyLossBoundaryMargin, "screen px")
+            .AddMetric("safety_loss_fake_contact_samples", value.SafetyLossFakeContactSamples)
+            .AddMetric(
+                "safety_loss_branch_transitions_after_trigger",
+                value.SafetyLossBranchTransitionsAfterTrigger)
             .AddMetric("minimum_canvas_margin", value.MinimumCanvasMargin, "model px")
             .AddMetric("minimum_visual_margin", value.MinimumVisualMargin, "screen px")
             .AddMetric("screen_heights_covered", value.ScreenHeightsCovered)
@@ -1076,6 +3049,129 @@ internal static class LostGripFallSelfTest
                 $"{value.MaximumCatchCentroidError:F3}/" +
                 $"{value.MaximumRegripCentroidDrift:F3}")
             .AddCheck(
+                "pre-contact reach coverage and ordering",
+                value.ReachSeekingEntries == ExpectedScenarioCount &&
+                value.ContactHoldEntries == ExpectedScenarioCount &&
+                value.ReachOrderingViolations == 0 &&
+                value.MinimumNonZeroSeekingSteps >= 2 &&
+                value.MinimumBehaviorReachPeak > 0f,
+                $"{ExpectedScenarioCount} Seeking/ContactHold; >= 2 nonzero steps; 0 ordering violations",
+                $"{value.ReachSeekingEntries}/{value.ContactHoldEntries}; " +
+                $"steps {value.MinimumNonZeroSeekingSteps}; " +
+                $"peak {value.MinimumBehaviorReachPeak:F3}; " +
+                $"violations {value.ReachOrderingViolations}")
+            .AddCheck(
+                "four limbs reach upward toward distinct body-frame targets",
+                value.ReachDirectionViolations == 0 &&
+                value.FourTargetScenarios == ExpectedScenarioCount &&
+                value.FourLegObservedScenarios == ExpectedScenarioCount &&
+                value.MinimumReachTargetErrorReduction > 1f &&
+                value.MinimumFootUpwardTravel > 1f &&
+                value.MinimumPawCatchDirectionTravel > 1f &&
+                value.MinimumArmRadiusRetention >= 0.74f &&
+                value.MaximumFirstVisibleArmRetraction <= 0.5f,
+                "all four paws move upward toward independent targets without collapsing through a shoulder or visibly retracting first",
+                $"reduction {value.MinimumReachTargetErrorReduction:F2}; " +
+                $"up {value.MinimumFootUpwardTravel:F2}; " +
+                $"toward {value.MinimumPawCatchDirectionTravel:F2}; " +
+                $"radius retention {value.MinimumArmRadiusRetention:P0}; " +
+                $"targets/legs {value.FourTargetScenarios}/" +
+                $"{value.FourLegObservedScenarios}; " +
+                $"first retraction {value.MaximumFirstVisibleArmRetraction:F2}px; " +
+                $"violations {value.ReachDirectionViolations}")
+            .AddCheck(
+                "visible four-paw reach begins while the host is falling",
+                value.PreStopPawMotionViolations == 0 &&
+                value.MinimumRecordedLostGripSteps > 0 &&
+                value.MinimumMovingVisiblePawSteps >= 2 &&
+                value.MinimumVisiblePawMotionLeadSteps >= 1 &&
+                value.MinimumMovingVisiblePawDisplayFrames60Hz >= 6 &&
+                value.MinimumVisiblePawMotionLeadDisplayFrames60Hz >= 6,
+                "all four rendered paws visibly advance while falling for >= 6 committed 60 Hz frames (>= 100 ms), across both cadence phase offsets",
+                $"moving steps {value.MinimumMovingVisiblePawSteps}; " +
+                $"lead {value.MinimumVisiblePawMotionLeadSteps}; " +
+                $"60Hz moving/lead " +
+                $"{value.MinimumMovingVisiblePawDisplayFrames60Hz}/" +
+                $"{value.MinimumVisiblePawMotionLeadDisplayFrames60Hz}; " +
+                $"recorded {value.MinimumRecordedLostGripSteps}; " +
+                $"violations {value.PreStopPawMotionViolations}; " +
+                $"worst {value.WorstReachTimingDetail}")
+            .AddCheck(
+                "four-paw target spread and limb/body clearance",
+                value.ReachIkBranchViolations == 0 &&
+                value.ReachIkBranchTransitions > 0 &&
+                value.MinimumIkBranchTransitionStraightness >=
+                    LostGripRegripAnimationProbe.MinimumBranchTransitionStraightness &&
+                value.MaximumIkBranchTransitionElbowJump <=
+                    LostGripRegripAnimationProbe.MaximumBranchTransitionElbowJump &&
+                value.IkBranchTransitionPolicyPassed &&
+                value.ReachBodyClearanceViolations == 0 &&
+                value.ReachOwnEnvelopeReentryViolations == 0 &&
+                value.MinimumFrontHeadwardTargetTravel > 0.5f &&
+                value.MinimumRearTailwardTargetTravel > 0.5f &&
+                value.MinimumTargetSeparation > 1f &&
+                value.MinimumNonOwnedBodyClearance >= 0f,
+                "front targets escape headward, rear targets tailward; each IK branch may switch once only at near-full extension without an elbow jump; both limb links avoid distant body capsules and do not re-enter the owned silhouette",
+                $"head/tail {value.MinimumFrontHeadwardTargetTravel:F2}/" +
+                $"{value.MinimumRearTailwardTargetTravel:F2}; " +
+                $"target gap {value.MinimumTargetSeparation:F2}; " +
+                $"clearance {value.MinimumNonOwnedBodyClearance:F2}; " +
+                $"branch switches/violations " +
+                $"{value.ReachIkBranchTransitions}/" +
+                $"{value.ReachIkBranchViolations}, " +
+                $"straight/jump " +
+                $"{value.MinimumIkBranchTransitionStraightness:F5}/" +
+                $"{value.MaximumIkBranchTransitionElbowJump:F4}; " +
+                $"policy {value.IkBranchTransitionPolicyPassed}; " +
+                $"body/reentry " +
+                $"{value.ReachBodyClearanceViolations}/" +
+                $"{value.ReachOwnEnvelopeReentryViolations}; " +
+                $"per-leg {value.PerLegReachGeometryDetail}; " +
+                $"worst {value.WorstReachBodyClearanceDetail}; " +
+                $"worst switch {value.WorstIkBranchTransitionDetail}; " +
+                $"first reentry {value.FirstReachOwnEnvelopeReentryDetail}; " +
+                $"per-leg first {value.PerLegFirstReachOwnEnvelopeReentryDetail}")
+            .AddCheck(
+                "bounded runtime safety projection",
+                value.ReachProjectionContinuityViolations == 0 &&
+                value.MaximumProjectionLimbPoseJump <=
+                    LostGripRegripAnimationProbe.MaximumProjectionLimbPoseJump &&
+                value.ReachRollbackLimbSamples == 0,
+                "any projected limb changes by <= 4 model px per fixed step; nominal scenarios never roll back and hold a paw",
+                $"requires-mask=" +
+                $"{Convert.ToString(value.ReachRequiresProjectionLegMask, 2)}," +
+                $"projected/rollback=" +
+                $"{value.ReachProjectedLimbSamples}/" +
+                $"{value.ReachRollbackLimbSamples}," +
+                $"max-jump={value.MaximumProjectionLimbPoseJump:F4}," +
+                $"violations={value.ReachProjectionContinuityViolations}," +
+                $"worst={value.WorstProjectionLimbPoseJumpDetail}")
+            .AddCheck(
+                "contact occurs before the stationary hold",
+                value.ContactStopViolations == 0 &&
+                value.MaximumTerminalReachError <= 0.25f &&
+                value.MaximumContactError <= 0.25f,
+                "final moving Seeking frame contacts all four paws with mask 0b1111; next stationary frame holds them",
+                $"violations {value.ContactStopViolations}; " +
+                $"errors {value.MaximumTerminalReachError:F3}/{value.MaximumContactError:F3}")
+            .AddCheck(
+                "reach and contact pose continuity",
+                value.MaximumReachEntryPoseJump <= 3f &&
+                value.MaximumContactSpineDrift <= 0.01f,
+                "Seeking entry jump <= 3 model px; contact spine drift <= 0.01 model px; non-branch limb jump remains a diagnostic because ordinary full extension can exceed 3 px",
+                $"entry/nonbranch/contact " +
+                $"{value.MaximumReachEntryPoseJump:F3}/" +
+                $"{value.MaximumNonBranchLimbPoseJump:F3}/" +
+                $"{value.MaximumContactSpineDrift:F4}; " +
+                $"worst {value.WorstNonBranchLimbPoseJumpDetail}")
+            .AddCheck(
+                "post-contact host and visual stability",
+                value.MaximumPostContactWindowDrift <= 0.001f &&
+                value.MaximumPostContactVisualCentroidDrift <= 13f,
+                "window <= 0.001 screen px; visual AABB centroid <= 13 screen px",
+                $"{value.MaximumPostContactWindowDrift:F4}/" +
+                $"{value.MaximumPostContactVisualCentroidDrift:F3}")
+            .AddCheck(
                 "free-fall reference-frame safety",
                 value.MaximumContainmentCorrectionTotal <= 0.01f &&
                 value.MaximumContainmentCorrection <= 0.01f &&
@@ -1107,10 +3203,142 @@ internal static class LostGripFallSelfTest
             .AddCheck("monotonic downward motion", value.MonotonicityViolations == 0, "0 violations", value.MonotonicityViolations.ToString())
             .AddCheck("pointer cannot steal fall", value.PointerPriorityPassed, "true", value.PointerPriorityPassed.ToString())
             .AddCheck("real grab pre-empts fall", value.GrabPriorityPassed, "true", value.GrabPriorityPassed.ToString())
+            .AddCheck(
+                "catch input is isolated from non-free-fall poses",
+                value.NonFreeFallInputIsolationPassed,
+                "true",
+                value.NonFreeFallInputIsolationPassed.ToString())
+            .AddCheck(
+                "real mouse grab remains isolated and constrained",
+                value.RealGrabAnimationIsolationPassed &&
+                value.RealGrabMaximumError <= LizardConfiguration.Default.Physics.MaximumGrabError + 0.001f,
+                "auto-regrip phase None; grab error within configured limit",
+                $"{value.RealGrabAnimationIsolationPassed}; {value.RealGrabMaximumError:F3}")
+            .AddCheck(
+                "collapsed lead preserves the first four-paw pose",
+                value.CollapsedLeadFourPawContinuityPassed,
+                "all four feet/targets and bend branches remain continuous and contact mask stays zero",
+                value.CollapsedLeadFourPawContinuityPassed.ToString())
+            .AddCheck(
+                "minimal lead branch transition is stateful and contact-safe",
+                value.MinimalLeadBranchTransitionPassed,
+                "three updates capture, switch on the full-extension plateau, then reach/contact; a two-update endpoint jump must not fabricate contact",
+                value.MinimalLeadBranchTransitionDetail)
+            .AddCheck(
+                "unsafe four-limb reach cannot authorize contact",
+                value.ContactSafeNegativeContractPassed,
+                "an intentionally impossible body-clearance profile keeps contact-safe false and mask zero through an allowed-contact Regrip input",
+                value.ContactSafeNegativeContractDetail)
+            .AddCheck(
+                "four-paw reach geometry survives rotated body headings",
+                value.RotatedHeadingFourPawGeometryPassed,
+                "0/+90/-90/180 degree poses retain screen-up targets, branch/radius continuity, six 60 Hz moving frames, distant-body clearance, no owned-envelope reentry, and atomic 0b1111 contact",
+                value.RotatedHeadingFourPawGeometryDetail)
+            .AddCheck(
+                "lost-grip four-paw pose is DPI and refresh deterministic",
+                value.DpiRefreshDeterminismPassed,
+                "equivalent 1x/1.25x/1.5x/2x worlds and 60/120/240 Hz display callbacks commit the same common-time four-paw poses",
+                value.DpiRefreshDeterminismPassed.ToString())
+            .AddCheck(
+                "mid-seeking safety loss degrades without a fake catch",
+                value.MidSeekingSafetyLossFallbackPassed &&
+                value.MaximumSafetyLossPoseJump <= 3f &&
+                value.MinimumSafetyLossBoundaryMargin >= -0.001f &&
+                value.SafetyLossFakeContactSamples == 0 &&
+                value.SafetyLossBranchTransitionsAfterTrigger == 0,
+                "SafetyForced adds no IK branch switch or fake contact on/after its trigger, then uses continuous non-contact recovery",
+                $"passed {value.MidSeekingSafetyLossFallbackPassed}; " +
+                $"local-pose jump {value.MaximumSafetyLossPoseJump:F3}; " +
+                $"margin {value.MinimumSafetyLossBoundaryMargin:F2}px; " +
+                $"fake contacts {value.SafetyLossFakeContactSamples}; " +
+                $"post-trigger switches " +
+                $"{value.SafetyLossBranchTransitionsAfterTrigger}; " +
+                value.MidSeekingSafetyLossFallbackDetail)
             .AddCheck("pause pre-empts fall", value.PausePriorityPassed, "true", value.PausePriorityPassed.ToString())
             .AddCheck("finite behavior and pose", value.NonFiniteSamples == 0, "0", value.NonFiniteSamples.ToString())
             .AddCheck("Chinese debug labels", value.DebugChineseLabelsPassed, "true", value.DebugChineseLabelsPassed.ToString())
             .Build();
+    }
+
+    private sealed class DpiCadenceScenario
+    {
+        private const double DeviceLeft = -320d;
+        private const double DeviceTop = 180d;
+        private const double LogicalWidth = 1280d;
+        private const double LogicalHeight = 800d;
+        private readonly int _displayRate;
+        private readonly SafetyArea _fullRenderSafety;
+
+        public LizardGameModule Module { get; }
+        public DesktopPetRuntime<LizardRenderFrame> Runtime { get; }
+        public WorldRect NavigationArea { get; }
+
+        public DpiCadenceScenario(
+            LizardProfile profile,
+            double scale,
+            int displayRate)
+        {
+            _displayRate = displayRate;
+            var topology = new DisplayTopology(
+            [
+                new DisplayDescriptor(
+                    $"lost-grip-{scale:0.##}x-{displayRate}hz",
+                    DeviceRectFromLogical(
+                        0d,
+                        0d,
+                        LogicalWidth,
+                        LogicalHeight,
+                        scale),
+                    DeviceRectFromLogical(
+                        48d,
+                        32d,
+                        1232d,
+                        744d,
+                        scale),
+                    scale,
+                    true)
+            ]);
+            NavigationArea = ToWorldRect(topology.Primary.WorldWorkingArea);
+            _fullRenderSafety = new SafetyArea(NavigationArea, true);
+            Module = new LizardGameModule(profile, 0x6D41);
+            Runtime = new DesktopPetRuntime<LizardRenderFrame>(Module);
+            var deviceSpawn = new DevicePoint(
+                DeviceLeft + 640d * scale,
+                DeviceTop + 96d * scale);
+            var worldSpawn = topology.DeviceToWorld(deviceSpawn);
+            Runtime.Reset(new Vector2((float)worldSpawn.X, (float)worldSpawn.Y));
+        }
+
+        public void AdvanceForCommonTicks(int ticks)
+        {
+            var callsPerTick = _displayRate / 60;
+            for (var call = 0; call < ticks * callsPerTick; call++)
+            {
+                Runtime.Advance(new DesktopPetInput(
+                    1f / _displayRate,
+                    NavigationArea,
+                    _fullRenderSafety,
+                    new PointerSample(Vector2.Zero, false),
+                    false));
+            }
+        }
+
+        private static DeviceRect DeviceRectFromLogical(
+            double left,
+            double top,
+            double right,
+            double bottom,
+            double scale) => new(
+                DeviceLeft + left * scale,
+                DeviceTop + top * scale,
+                DeviceLeft + right * scale,
+                DeviceTop + bottom * scale);
+
+        private static WorldRect ToWorldRect(WorldRectD rect) => new(
+            (float)rect.Left,
+            (float)rect.Top,
+            (float)rect.Right,
+            (float)rect.Bottom);
     }
 
     private readonly record struct ScreenContext(
@@ -1118,6 +3346,24 @@ internal static class LostGripFallSelfTest
         FloatRect NavigationArea,
         float FullRenderRadius,
         LostGripSafetyContext LostGripSafety);
+
+    private readonly record struct SafetyLossFallbackResult(
+        bool Passed,
+        float MaximumPoseJump,
+        float MinimumBoundaryMargin,
+        int FakeContactSamples,
+        int BranchTransitionsAfterTrigger,
+        string Detail)
+    {
+        public static SafetyLossFallbackResult Failed => new(
+            false,
+            float.PositiveInfinity,
+            float.NegativeInfinity,
+            0,
+            0,
+            "setup-failed");
+    }
+
 
     private sealed class Metrics
     {
@@ -1139,6 +3385,69 @@ internal static class LostGripFallSelfTest
         public float MaximumReferenceCorrectionTotal;
         public float MaximumReferenceCorrection;
         public float MaximumReferenceCenterError;
+        public int ReachSeekingEntries;
+        public int ContactHoldEntries;
+        public int ReachOrderingViolations;
+        public int ReachDirectionViolations;
+        public int ReachIkBranchViolations;
+        public int ReachIkBranchTransitions;
+        public float MinimumIkBranchTransitionStraightness =
+            float.PositiveInfinity;
+        public float MaximumIkBranchTransitionElbowJump;
+        public string WorstIkBranchTransitionDetail = "none";
+        public float MaximumNonBranchLimbPoseJump;
+        public string WorstNonBranchLimbPoseJumpDetail = "none";
+        public int ReachRequiresProjectionLegMask;
+        public int ReachProjectedLimbSamples;
+        public int ReachRollbackLimbSamples;
+        public int ReachProjectionContinuityViolations;
+        public float MaximumProjectionLimbPoseJump;
+        public string WorstProjectionLimbPoseJumpDetail = "none";
+        public int ReachBodyClearanceViolations;
+        public int ReachOwnEnvelopeReentryViolations;
+        public string WorstReachBodyClearanceDetail = "none";
+        public string FirstReachOwnEnvelopeReentryDetail = "none";
+        public string[] FirstReachOwnEnvelopeReentryDetailByLeg { get; } =
+            Enumerable.Repeat("none", 4).ToArray();
+        public string PerLegFirstReachOwnEnvelopeReentryDetail => string.Join(
+            " | ",
+            Enumerable.Range(0, 4).Select(index =>
+                $"L{index}:{FirstReachOwnEnvelopeReentryDetailByLeg[index]}"));
+        public string WorstReachTimingDetail = "none";
+        public float[] MinimumRemoteClearanceByLeg { get; } =
+            Enumerable.Repeat(float.PositiveInfinity, 4).ToArray();
+        public int[] OwnEnvelopeReentriesByLeg { get; } = new int[4];
+        public string PerLegReachGeometryDetail => string.Join(
+            "/",
+            Enumerable.Range(0, 4).Select(index =>
+                $"L{index}:{MinimumRemoteClearanceByLeg[index]:F2}," +
+                $"R{OwnEnvelopeReentriesByLeg[index]}"));
+        public int ContactStopViolations;
+        public int FourTargetScenarios;
+        public int FourLegObservedScenarios;
+        public int MinimumNonZeroSeekingSteps = int.MaxValue;
+        public float MinimumBehaviorReachPeak = float.PositiveInfinity;
+        public float MinimumReachTargetErrorReduction = float.PositiveInfinity;
+        public float MinimumFootUpwardTravel = float.PositiveInfinity;
+        public float MinimumPawCatchDirectionTravel = float.PositiveInfinity;
+        public float MinimumArmRadiusRetention = float.PositiveInfinity;
+        public float MaximumFirstVisibleArmRetraction;
+        public float MinimumFrontHeadwardTargetTravel = float.PositiveInfinity;
+        public float MinimumRearTailwardTargetTravel = float.PositiveInfinity;
+        public float MinimumTargetSeparation = float.PositiveInfinity;
+        public float MinimumNonOwnedBodyClearance = float.PositiveInfinity;
+        public float MaximumReachEntryPoseJump;
+        public float MaximumTerminalReachError;
+        public float MaximumContactError;
+        public float MaximumContactSpineDrift;
+        public float MaximumPostContactWindowDrift;
+        public float MaximumPostContactVisualCentroidDrift;
+        public int MinimumRecordedLostGripSteps = int.MaxValue;
+        public int MinimumMovingVisiblePawSteps = int.MaxValue;
+        public int MinimumVisiblePawMotionLeadSteps = int.MaxValue;
+        public int MinimumMovingVisiblePawDisplayFrames60Hz = int.MaxValue;
+        public int MinimumVisiblePawMotionLeadDisplayFrames60Hz = int.MaxValue;
+        public int PreStopPawMotionViolations;
         public float MinimumCanvasMargin = float.PositiveInfinity;
         public float MinimumVisualMargin = float.PositiveInfinity;
         public float MinimumAvailableDistance = float.PositiveInfinity;
@@ -1158,6 +3467,240 @@ internal static class LostGripFallSelfTest
         public HashSet<int> Seeds { get; } = [];
         public HashSet<int> StartBands { get; } = [];
         public HashSet<int> LongFallScreenHeights { get; } = [];
+
+        public void RecordReach(LostGripRegripProbeResult result)
+        {
+            ReachSeekingEntries += result.SeekingSeen ? 1 : 0;
+            ContactHoldEntries += result.ContactHoldSeen ? 1 : 0;
+            ReachOrderingViolations += result.OrderingViolations;
+            ReachDirectionViolations += result.DirectionViolations;
+            ReachIkBranchViolations += result.IkBranchViolations;
+            ReachIkBranchTransitions += result.IkBranchTransitions;
+            if (result.IkBranchTransitions > 0)
+            {
+                if (result.MinimumIkBranchTransitionStraightness <
+                    MinimumIkBranchTransitionStraightness ||
+                    result.MaximumIkBranchTransitionElbowJump >
+                    MaximumIkBranchTransitionElbowJump)
+                {
+                    WorstIkBranchTransitionDetail =
+                        result.WorstIkBranchTransitionDetail;
+                }
+                MinimumIkBranchTransitionStraightness = Math.Min(
+                    MinimumIkBranchTransitionStraightness,
+                    result.MinimumIkBranchTransitionStraightness);
+                MaximumIkBranchTransitionElbowJump = Math.Max(
+                    MaximumIkBranchTransitionElbowJump,
+                    result.MaximumIkBranchTransitionElbowJump);
+            }
+            if (result.MaximumNonBranchLimbPoseJump >
+                MaximumNonBranchLimbPoseJump)
+            {
+                MaximumNonBranchLimbPoseJump =
+                    result.MaximumNonBranchLimbPoseJump;
+                WorstNonBranchLimbPoseJumpDetail =
+                    result.WorstNonBranchLimbPoseJumpDetail;
+            }
+            ReachRequiresProjectionLegMask |= result.RequiresProjectionLegMask;
+            ReachProjectedLimbSamples += result.ProjectedLimbSamples;
+            ReachRollbackLimbSamples += result.RollbackLimbSamples;
+            ReachProjectionContinuityViolations +=
+                result.ProjectionContinuityViolations;
+            if (result.MaximumProjectionLimbPoseJump >
+                MaximumProjectionLimbPoseJump)
+            {
+                MaximumProjectionLimbPoseJump =
+                    result.MaximumProjectionLimbPoseJump;
+                WorstProjectionLimbPoseJumpDetail =
+                    result.WorstProjectionLimbPoseJumpDetail;
+            }
+            ReachBodyClearanceViolations += result.BodyClearanceViolations;
+            ReachOwnEnvelopeReentryViolations +=
+                result.OwnEnvelopeReentryViolations;
+            if (result.MinimumNonOwnedBodyClearance <
+                MinimumNonOwnedBodyClearance)
+            {
+                WorstReachBodyClearanceDetail =
+                    result.WorstBodyClearanceDetail +
+                    "; selected-path " + result.MotionTimingDetail;
+            }
+            if (FirstReachOwnEnvelopeReentryDetail == "none" &&
+                result.OwnEnvelopeReentryViolations > 0)
+            {
+                FirstReachOwnEnvelopeReentryDetail =
+                    result.FirstOwnEnvelopeReentryDetail;
+            }
+            for (var index = 0; index < 4; index++)
+            {
+                MinimumRemoteClearanceByLeg[index] = Math.Min(
+                    MinimumRemoteClearanceByLeg[index],
+                    result.MinimumNonOwnedBodyClearanceByLeg[index]);
+                OwnEnvelopeReentriesByLeg[index] +=
+                    result.OwnEnvelopeReentriesByLeg[index];
+                if (FirstReachOwnEnvelopeReentryDetailByLeg[index] == "none" &&
+                    result.FirstOwnEnvelopeReentryDetailByLeg[index] != "none")
+                {
+                    FirstReachOwnEnvelopeReentryDetailByLeg[index] =
+                        result.FirstOwnEnvelopeReentryDetailByLeg[index];
+                }
+            }
+            ContactStopViolations += result.ContactStopViolations;
+            FourTargetScenarios += result.DistinctTargetsSeen ? 1 : 0;
+            FourLegObservedScenarios += result.ObservedLegMask == 0b1111 ? 1 : 0;
+            if (result.SeekingSeen)
+            {
+                MinimumNonZeroSeekingSteps = Math.Min(
+                    MinimumNonZeroSeekingSteps,
+                    result.NonZeroSeekingSteps);
+                MinimumBehaviorReachPeak = Math.Min(
+                    MinimumBehaviorReachPeak,
+                    result.BehaviorReachPeak);
+                MinimumReachTargetErrorReduction = Math.Min(
+                    MinimumReachTargetErrorReduction,
+                    result.TargetErrorReduction);
+                MinimumFootUpwardTravel = Math.Min(
+                    MinimumFootUpwardTravel,
+                    result.MinimumFootUpwardTravel);
+                MinimumPawCatchDirectionTravel = Math.Min(
+                    MinimumPawCatchDirectionTravel,
+                    result.MinimumPawCatchDirectionTravel);
+                MinimumArmRadiusRetention = Math.Min(
+                    MinimumArmRadiusRetention,
+                    result.MinimumArmRadiusRetention);
+                MaximumFirstVisibleArmRetraction = Math.Max(
+                    MaximumFirstVisibleArmRetraction,
+                    result.FirstVisibleArmRetraction);
+                MinimumFrontHeadwardTargetTravel = Math.Min(
+                    MinimumFrontHeadwardTargetTravel,
+                    result.MinimumFrontHeadwardTargetTravel);
+                MinimumRearTailwardTargetTravel = Math.Min(
+                    MinimumRearTailwardTargetTravel,
+                    result.MinimumRearTailwardTargetTravel);
+                MinimumTargetSeparation = Math.Min(
+                    MinimumTargetSeparation,
+                    result.MinimumTargetSeparation);
+                MinimumNonOwnedBodyClearance = Math.Min(
+                    MinimumNonOwnedBodyClearance,
+                    result.MinimumNonOwnedBodyClearance);
+            }
+            if (!result.TerminalReachSeen)
+            {
+                ReachOrderingViolations++;
+            }
+            MaximumReachEntryPoseJump = Math.Max(
+                MaximumReachEntryPoseJump,
+                result.ReachEntryPoseJump);
+            MaximumTerminalReachError = Math.Max(
+                MaximumTerminalReachError,
+                result.TerminalReachError);
+            MaximumContactError = Math.Max(
+                MaximumContactError,
+                result.ContactError);
+            MaximumContactSpineDrift = Math.Max(
+                MaximumContactSpineDrift,
+                result.ContactSpineDrift);
+            MaximumPostContactWindowDrift = Math.Max(
+                MaximumPostContactWindowDrift,
+                result.PostContactWindowDrift);
+            MaximumPostContactVisualCentroidDrift = Math.Max(
+                MaximumPostContactVisualCentroidDrift,
+                result.PostContactVisualCentroidDrift);
+            MinimumRecordedLostGripSteps = Math.Min(
+                MinimumRecordedLostGripSteps,
+                result.RecordedLostGripSteps);
+            if (result.MovingVisiblePawDisplayFrames60Hz <
+                    MinimumMovingVisiblePawDisplayFrames60Hz ||
+                (result.MovingVisiblePawDisplayFrames60Hz ==
+                     MinimumMovingVisiblePawDisplayFrames60Hz &&
+                 result.VisiblePawMotionLeadDisplayFrames60Hz <
+                     MinimumVisiblePawMotionLeadDisplayFrames60Hz) ||
+                (WorstReachTimingDetail == "none" &&
+                 result.PreStopPawMotionViolations > 0))
+            {
+                WorstReachTimingDetail = result.MotionTimingDetail;
+            }
+            MinimumMovingVisiblePawSteps = Math.Min(
+                MinimumMovingVisiblePawSteps,
+                result.MovingVisiblePawSteps);
+            MinimumVisiblePawMotionLeadSteps = Math.Min(
+                MinimumVisiblePawMotionLeadSteps,
+                result.VisiblePawMotionLeadSteps);
+            MinimumMovingVisiblePawDisplayFrames60Hz = Math.Min(
+                MinimumMovingVisiblePawDisplayFrames60Hz,
+                result.MovingVisiblePawDisplayFrames60Hz);
+            MinimumVisiblePawMotionLeadDisplayFrames60Hz = Math.Min(
+                MinimumVisiblePawMotionLeadDisplayFrames60Hz,
+                result.VisiblePawMotionLeadDisplayFrames60Hz);
+            PreStopPawMotionViolations += result.PreStopPawMotionViolations;
+        }
+
+        public void NormalizeReachMinimums()
+        {
+            if (MinimumNonZeroSeekingSteps == int.MaxValue)
+            {
+                MinimumNonZeroSeekingSteps = 0;
+            }
+            if (!float.IsFinite(MinimumIkBranchTransitionStraightness))
+            {
+                MinimumIkBranchTransitionStraightness = 0f;
+            }
+            if (!float.IsFinite(MinimumBehaviorReachPeak))
+            {
+                MinimumBehaviorReachPeak = 0f;
+            }
+            if (!float.IsFinite(MinimumReachTargetErrorReduction))
+            {
+                MinimumReachTargetErrorReduction = 0f;
+            }
+            if (!float.IsFinite(MinimumFootUpwardTravel))
+            {
+                MinimumFootUpwardTravel = 0f;
+            }
+            if (!float.IsFinite(MinimumPawCatchDirectionTravel))
+            {
+                MinimumPawCatchDirectionTravel = 0f;
+            }
+            if (!float.IsFinite(MinimumArmRadiusRetention))
+            {
+                MinimumArmRadiusRetention = 0f;
+            }
+            if (!float.IsFinite(MinimumFrontHeadwardTargetTravel))
+            {
+                MinimumFrontHeadwardTargetTravel = 0f;
+            }
+            if (!float.IsFinite(MinimumRearTailwardTargetTravel))
+            {
+                MinimumRearTailwardTargetTravel = 0f;
+            }
+            if (!float.IsFinite(MinimumTargetSeparation))
+            {
+                MinimumTargetSeparation = 0f;
+            }
+            if (!float.IsFinite(MinimumNonOwnedBodyClearance))
+            {
+                MinimumNonOwnedBodyClearance = 0f;
+            }
+            if (MinimumRecordedLostGripSteps == int.MaxValue)
+            {
+                MinimumRecordedLostGripSteps = 0;
+            }
+            if (MinimumMovingVisiblePawSteps == int.MaxValue)
+            {
+                MinimumMovingVisiblePawSteps = 0;
+            }
+            if (MinimumVisiblePawMotionLeadSteps == int.MaxValue)
+            {
+                MinimumVisiblePawMotionLeadSteps = 0;
+            }
+            if (MinimumMovingVisiblePawDisplayFrames60Hz == int.MaxValue)
+            {
+                MinimumMovingVisiblePawDisplayFrames60Hz = 0;
+            }
+            if (MinimumVisiblePawMotionLeadDisplayFrames60Hz == int.MaxValue)
+            {
+                MinimumVisiblePawMotionLeadDisplayFrames60Hz = 0;
+            }
+        }
     }
 
     private sealed record PoseSnapshot(
@@ -1183,6 +3726,44 @@ internal static class LostGripFallSelfTest
                 maximum = Math.Max(maximum, Vector2.Distance(Feet[index], other.Feet[index]));
             }
             return maximum;
+        }
+    }
+
+    private sealed record BranchPoseSnapshot(
+        Vector2[] Elbows,
+        float[] BendSigns,
+        float[] Straightness,
+        float[] ArmLengths)
+    {
+        public static BranchPoseSnapshot Capture(
+            ProceduralLizard lizard,
+            float[]? capturedArmLengths = null)
+        {
+            var elbows = new Vector2[4];
+            var bendSigns = new float[4];
+            var straightness = new float[4];
+            var armLengths = capturedArmLengths?.ToArray() ?? new float[4];
+            for (var index = 0; index < 4; index++)
+            {
+                var leg = lizard.Legs[index];
+                elbows[index] = leg.Elbow;
+                bendSigns[index] = MeasureBendSign(leg);
+                if (capturedArmLengths is null)
+                {
+                    armLengths[index] =
+                        Vector2.Distance(leg.Shoulder, leg.Elbow) +
+                        Vector2.Distance(leg.Elbow, leg.Foot);
+                }
+                straightness[index] = armLengths[index] > 0.0001f
+                    ? Vector2.Distance(leg.Shoulder, leg.Foot) /
+                      armLengths[index]
+                    : 0f;
+            }
+            return new BranchPoseSnapshot(
+                elbows,
+                bendSigns,
+                straightness,
+                armLengths);
         }
     }
 }

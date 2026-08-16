@@ -1,0 +1,74 @@
+name: Cross-platform verification
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cross-platform-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            rid: win-x64
+          - os: macos-latest
+            rid: osx-arm64
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+
+      - name: Install .NET 8 SDK
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Restore portable solution
+        run: dotnet restore InfiniteLizards.sln
+
+      - name: Build portable solution
+        run: dotnet build InfiniteLizards.sln -c Release --no-restore
+
+      - name: Verify generic engine
+        run: dotnet run --project tests/DesktopPet.Engine.SelfTests/DesktopPet.Engine.SelfTests.csproj -c Release --no-build
+
+      - name: Verify gameplay and architecture boundaries
+        run: dotnet run --project tests/InfiniteLizards.Gameplay.SelfTests/InfiniteLizards.Gameplay.SelfTests.csproj -c Release --no-build
+
+      - name: Verify desktop platform contracts
+        run: dotnet run --project tests/InfiniteLizards.Desktop.SelfTests/InfiniteLizards.Desktop.SelfTests.csproj -c Release --no-build
+
+      - name: Verify Windows native-controller safety contracts
+        if: runner.os == 'Windows'
+        run: dotnet run --project tests/InfiniteLizards.Windows.NativeAcceptance/InfiniteLizards.Windows.NativeAcceptance.csproj -c Release --no-build -- --self-test
+
+      - name: Build legacy WPF compatibility host
+        if: runner.os == 'Windows'
+        run: dotnet build DesktopLizard.csproj -c Release
+
+      - name: Publish cross-platform desktop host
+        run: >-
+          dotnet publish src/InfiniteLizards.Desktop/InfiniteLizards.Desktop.csproj
+          -c Release
+          -r ${{ matrix.rid }}
+          --self-contained true
+          -p:DebugType=None
+          -p:DebugSymbols=false
+          -o artifacts/${{ matrix.rid }}
+
+      - name: Validate macOS app packaging script
+        if: runner.os == 'macOS'
+        run: |
+          bash -n scripts/publish-macos.sh
+          plutil -lint scripts/macos-entitlements.plist
+          plutil -lint scripts/macos-entitlements-adhoc.plist
+          ./scripts/publish-macos.sh ${{ matrix.rid }}

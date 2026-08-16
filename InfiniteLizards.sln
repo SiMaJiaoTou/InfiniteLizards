@@ -1,0 +1,54 @@
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DesktopPet.Engine", "src\DesktopPet.Engine\DesktopPet.Engine.csproj", "{3F43C60E-3AB4-4C8D-8AF2-7792FDF20BAA}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "InfiniteLizards.Gameplay", "src\InfiniteLizards.Gameplay\InfiniteLizards.Gameplay.csproj", "{9A04AA55-D372-471B-9FF1-317782EB466B}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "InfiniteLizards.Desktop", "src\InfiniteLizards.Desktop\InfiniteLizards.Desktop.csproj", "{E94A0F1A-155D-4A44-8DFB-09352EBEE31A}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "InfiniteLizards.Gameplay.SelfTests", "tests\InfiniteLizards.Gameplay.SelfTests\InfiniteLizards.Gameplay.SelfTests.csproj", "{37CFF6C5-8C92-4104-A7DC-7664894B81D5}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DesktopPet.Engine.SelfTests", "tests\DesktopPet.Engine.SelfTests\DesktopPet.Engine.SelfTests.csproj", "{EF6E9C07-CA2E-4A9B-9BE5-571417320AB3}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "InfiniteLizards.Desktop.SelfTests", "tests\InfiniteLizards.Desktop.SelfTests\InfiniteLizards.Desktop.SelfTests.csproj", "{EE3FF8CB-D2F2-4693-8C31-B389252EAB72}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "InfiniteLizards.Windows.NativeAcceptance", "tests\InfiniteLizards.Windows.NativeAcceptance\InfiniteLizards.Windows.NativeAcceptance.csproj", "{08B0EE47-24B7-4BC1-A95D-554C12CB9201}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{3F43C60E-3AB4-4C8D-8AF2-7792FDF20BAA}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{3F43C60E-3AB4-4C8D-8AF2-7792FDF20BAA}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{3F43C60E-3AB4-4C8D-8AF2-7792FDF20BAA}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{3F43C60E-3AB4-4C8D-8AF2-7792FDF20BAA}.Release|Any CPU.Build.0 = Release|Any CPU
+		{9A04AA55-D372-471B-9FF1-317782EB466B}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{9A04AA55-D372-471B-9FF1-317782EB466B}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{9A04AA55-D372-471B-9FF1-317782EB466B}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{9A04AA55-D372-471B-9FF1-317782EB466B}.Release|Any CPU.Build.0 = Release|Any CPU
+		{E94A0F1A-155D-4A44-8DFB-09352EBEE31A}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{E94A0F1A-155D-4A44-8DFB-09352EBEE31A}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{E94A0F1A-155D-4A44-8DFB-09352EBEE31A}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{E94A0F1A-155D-4A44-8DFB-09352EBEE31A}.Release|Any CPU.Build.0 = Release|Any CPU
+		{37CFF6C5-8C92-4104-A7DC-7664894B81D5}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{37CFF6C5-8C92-4104-A7DC-7664894B81D5}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{37CFF6C5-8C92-4104-A7DC-7664894B81D5}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{37CFF6C5-8C92-4104-A7DC-7664894B81D5}.Release|Any CPU.Build.0 = Release|Any CPU
+		{EF6E9C07-CA2E-4A9B-9BE5-571417320AB3}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{EF6E9C07-CA2E-4A9B-9BE5-571417320AB3}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{EF6E9C07-CA2E-4A9B-9BE5-571417320AB3}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{EF6E9C07-CA2E-4A9B-9BE5-571417320AB3}.Release|Any CPU.Build.0 = Release|Any CPU
+		{EE3FF8CB-D2F2-4693-8C31-B389252EAB72}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{EE3FF8CB-D2F2-4693-8C31-B389252EAB72}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{EE3FF8CB-D2F2-4693-8C31-B389252EAB72}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{EE3FF8CB-D2F2-4693-8C31-B389252EAB72}.Release|Any CPU.Build.0 = Release|Any CPU
+		{08B0EE47-24B7-4BC1-A95D-554C12CB9201}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{08B0EE47-24B7-4BC1-A95D-554C12CB9201}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{08B0EE47-24B7-4BC1-A95D-554C12CB9201}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{08B0EE47-24B7-4BC1-A95D-554C12CB9201}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+EndGlobal

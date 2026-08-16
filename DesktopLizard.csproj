@@ -24,5 +24,14 @@
   <ItemGroup>
     <!-- Generated diagnostics may contain their own temporary C# projects. -->
     <Compile Remove="artifacts\**\*.cs" />
+    <!-- The portable engine/gameplay/Avalonia projects have their own compile
+         boundaries and must not leak back into the legacy WPF host. -->
+    <Compile Remove="src\**\*.cs" />
+    <Compile Remove="tests\**\*.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="src\DesktopPet.Engine\DesktopPet.Engine.csproj" />
+    <ProjectReference Include="src\InfiniteLizards.Gameplay\InfiniteLizards.Gameplay.csproj" />
   </ItemGroup>
 </Project>

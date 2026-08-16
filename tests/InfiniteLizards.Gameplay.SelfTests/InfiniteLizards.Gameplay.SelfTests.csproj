@@ -1,0 +1,41 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>InfiniteLizards.Gameplay.SelfTests</AssemblyName>
+    <RootNamespace>InfiniteLizards.Gameplay.SelfTests</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../src/DesktopPet.Engine/DesktopPet.Engine.csproj" />
+    <ProjectReference Include="../../src/InfiniteLizards.Gameplay/InfiniteLizards.Gameplay.csproj" />
+    <ProjectReference Include="../../src/InfiniteLizards.Desktop/InfiniteLizards.Desktop.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Include="../../Application/LegacyDebugFrameSnapshot.cs"
+             Link="Diagnostics/Support/LegacyDebugFrameSnapshot.cs" />
+    <Compile Include="../../Application/LegacyDebugTelemetryCoordinator.cs"
+             Link="Diagnostics/Support/LegacyDebugTelemetryCoordinator.cs" />
+    <Compile Include="../../Application/LegacyPetSimulationFrameAdapter.cs"
+             Link="Diagnostics/Support/LegacyPetSimulationFrameAdapter.cs" />
+    <Compile Include="../../Diagnostics/ConfigurationSelfTest.cs" Link="Diagnostics/ConfigurationSelfTest.cs" />
+    <Compile Include="../../Diagnostics/GaitSelfTest.cs" Link="Diagnostics/GaitSelfTest.cs" />
+    <Compile Include="../../Diagnostics/GrabReleaseSelfTest.cs" Link="Diagnostics/GrabReleaseSelfTest.cs" />
+    <Compile Include="../../Diagnostics/LivenessSelfTest.cs" Link="Diagnostics/LivenessSelfTest.cs" />
+    <Compile Include="../../Diagnostics/LostGripFallSelfTest.cs" Link="Diagnostics/LostGripFallSelfTest.cs" />
+    <Compile Include="../../Diagnostics/LostGripRegripAnimationProbe.cs" Link="Diagnostics/LostGripRegripAnimationProbe.cs" />
+    <Compile Include="../../Diagnostics/MouseChaseSelfTest.cs" Link="Diagnostics/MouseChaseSelfTest.cs" />
+    <Compile Include="../../Diagnostics/RoamingSelfTest.cs" Link="Diagnostics/RoamingSelfTest.cs" />
+    <Compile Include="../../Diagnostics/SimulationSessionSelfTest.cs" Link="Diagnostics/SimulationSessionSelfTest.cs" />
+    <Compile Include="../../Diagnostics/AnimationProfileSmokeTest.cs" Link="Diagnostics/AnimationProfileSmokeTest.cs" />
+    <Compile Include="../../Diagnostics/DanglingJitterAnalyzer.cs" Link="Diagnostics/DanglingJitterAnalyzer.cs" />
+    <Compile Include="../../Diagnostics/DebugStateControlSelfTest.cs" Link="Diagnostics/DebugStateControlSelfTest.cs" />
+    <Compile Include="../../Diagnostics/DebugPanelPlacementSelfTest.cs" Link="Diagnostics/DebugPanelPlacementSelfTest.cs" />
+    <Compile Include="../../Diagnostics/Framework/**/*.cs" Link="Diagnostics/Framework/%(RecursiveDir)%(Filename)%(Extension)" />
+    <Compile Include="../../Rendering/DebugLabelCatalog.cs" Link="Diagnostics/Support/DebugLabelCatalog.cs" />
+    <Compile Include="../../Windows/DebugPanelPlacementCalculator.cs" Link="Diagnostics/Support/DebugPanelPlacementCalculator.cs" />
+  </ItemGroup>
+</Project>

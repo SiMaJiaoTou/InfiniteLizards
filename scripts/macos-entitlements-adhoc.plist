@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "https://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- Non-Native-AOT .NET requires JIT under the hardened runtime. -->
+  <key>com.apple.security.cs.allow-jit</key>
+  <true/>
+  <!-- Ad-hoc signatures have no Apple Team ID, so hardened library
+       validation cannot establish that the self-contained runtime dylibs and
+       the apphost have the same team. This exception is used only when
+       CODESIGN_IDENTITY is "-"; Developer ID builds use the stricter file. -->
+  <key>com.apple.security.cs.disable-library-validation</key>
+  <true/>
+</dict>
+</plist>

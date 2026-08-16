@@ -1,4 +1,5 @@
 using System.IO;
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using DesktopLizard.Core;
 using DesktopLizard.Diagnostics.Framework;
@@ -37,6 +38,7 @@ internal static class ConfigurationSelfTest
         bool RoundTripPassed,
         bool PersistentSeedPassed,
         bool SchemaMigrationPassed,
+        bool PersistenceFailurePreservesValidConfig,
         bool InvalidFallbackPassed,
         bool InvalidFilePreserved,
         bool DeterministicProfilePassed,
@@ -49,7 +51,9 @@ internal static class ConfigurationSelfTest
         bool HardLimitsPassed,
         bool UnknownPropertyRejected,
         bool TimeStepDeterminismPassed,
+        bool FrameCatchUpBoundsPassed,
         bool GeometryEnvelopePassed,
+        bool DerivedGeometryBoundsPassed,
         bool IndividualVariationControlsPassed,
         bool LostGripConfigurationPassed,
         int WarningCount,
@@ -88,8 +92,10 @@ internal static class ConfigurationSelfTest
         var roundTripPassed = false;
         var persistentSeedPassed = false;
         var schemaMigrationPassed = false;
+        var persistenceFailurePreservesValidConfig = false;
         var invalidFallbackPassed = false;
         var invalidFilePreserved = false;
+        var derivedGeometryFallbackPassed = false;
         var unknownPropertyRejected = false;
         var warningCount = 0;
         var root = Path.Combine(
@@ -130,6 +136,8 @@ internal static class ConfigurationSelfTest
             {
                 "RegripFrontReachLengthFactor",
                 "RegripFrontReachOutwardWeight",
+                "RegripRearReachLengthFactor",
+                "RegripRearReachOutwardWeight",
                 "RegripContactHoldFraction"
             }.All(customPhysics.ContainsKey) &&
             new[]
@@ -162,6 +170,12 @@ internal static class ConfigurationSelfTest
                 MathF.Abs(
                     loaded.Configuration.Physics.RegripFrontReachOutwardWeight -
                     custom.Physics.RegripFrontReachOutwardWeight) <= 0.0001f &&
+                MathF.Abs(
+                    loaded.Configuration.Physics.RegripRearReachLengthFactor -
+                    custom.Physics.RegripRearReachLengthFactor) <= 0.0001f &&
+                MathF.Abs(
+                    loaded.Configuration.Physics.RegripRearReachOutwardWeight -
+                    custom.Physics.RegripRearReachOutwardWeight) <= 0.0001f &&
                 MathF.Abs(
                     loaded.Configuration.Physics.RegripContactHoldFraction -
                     custom.Physics.RegripContactHoldFraction) <= 0.0001f &&
@@ -197,6 +211,35 @@ internal static class ConfigurationSelfTest
                 generated.Configuration.IndividualSeed is > 0 &&
                 generatedAgain.LoadedFromDisk &&
                 generatedAgain.Configuration.IndividualSeed == generated.Configuration.IndividualSeed;
+
+            // Make the canonical temporary file path unwritable without
+            // relying on platform-specific file permission bits. A directory
+            // at that exact path makes File.WriteAllText fail on Windows and
+            // Unix while the source document remains readable and valid.
+            var readOnlySavePath = Path.Combine(root, "valid-read-only-save.json");
+            File.WriteAllText(
+                readOnlySavePath,
+                $"{{\"SchemaVersion\":{LizardConfiguration.CurrentSchemaVersion}," +
+                "\"Behavior\":{\"Speed\":{\"ReferenceMinimumCrawl\":23}}}");
+            Directory.CreateDirectory(readOnlySavePath + ".tmp");
+            var loadedWithoutWriteBack = LizardConfigurationStore.LoadOrCreate(
+                readOnlySavePath);
+            persistenceFailurePreservesValidConfig =
+                loadedWithoutWriteBack.LoadedFromDisk &&
+                loadedWithoutWriteBack.Configuration.IndividualSeed is > 0 &&
+                MathF.Abs(
+                    loadedWithoutWriteBack.Configuration.Behavior.Speed.ReferenceMinimumCrawl -
+                    23f) <= 0.0001f &&
+                loadedWithoutWriteBack.Warnings.Count == 1 &&
+                loadedWithoutWriteBack.Warnings[0].Contains(
+                    "无法写回",
+                    StringComparison.Ordinal) &&
+                string.Equals(
+                    File.ReadAllText(readOnlySavePath),
+                    $"{{\"SchemaVersion\":{LizardConfiguration.CurrentSchemaVersion}," +
+                    "\"Behavior\":{\"Speed\":{\"ReferenceMinimumCrawl\":23}}}",
+                    StringComparison.Ordinal);
+            warningCount += loadedWithoutWriteBack.Warnings.Count;
 
             var legacyPath = Path.Combine(root, "legacy-v1.json");
             File.WriteAllText(legacyPath, "{\"SchemaVersion\":1,\"IndividualSeed\":12345}");
@@ -443,6 +486,155 @@ internal static class ConfigurationSelfTest
             }
             warningCount += migratedReach.Warnings.Count;
 
+            var legacyFourPawPath = Path.Combine(root, "legacy-four-paw-v7.json");
+            const string legacyFourPawDocument =
+                "{\"SchemaVersion\":7,\"IndividualSeed\":86423," +
+                "\"Behavior\":{\"LostGripFall\":{" +
+                "\"ReachLeadDistance\":61,\"Gravity\":477," +
+                "\"AccelerationRampDuration\":0.31," +
+                "\"InitialAccelerationRatio\":0.29}}," +
+                "\"Physics\":{\"Gravity\":777," +
+                "\"RegripFrontReachLengthFactor\":0.63," +
+                "\"RegripFrontReachOutwardWeight\":0.21," +
+                "\"RegripContactHoldFraction\":0.37}}";
+            File.WriteAllText(legacyFourPawPath, legacyFourPawDocument);
+            var migratedFourPaw = LizardConfigurationStore.LoadOrCreate(
+                legacyFourPawPath);
+            var migratedFourPawPhysics = JsonNode.Parse(
+                File.ReadAllText(legacyFourPawPath))!["Physics"]!.AsObject();
+            var schema7FourPawMigrationPassed =
+                migratedFourPaw.LoadedFromDisk &&
+                migratedFourPaw.Warnings.Count == 1 &&
+                migratedFourPaw.Configuration.SchemaVersion ==
+                    LizardConfiguration.CurrentSchemaVersion &&
+                migratedFourPaw.Configuration.IndividualSeed == 86423 &&
+                MathF.Abs(
+                    migratedFourPaw.Configuration.Behavior.LostGripFall
+                        .ReachLeadDistance - 61f) <= 0.0001f &&
+                MathF.Abs(
+                    migratedFourPaw.Configuration.Behavior.LostGripFall.Gravity -
+                    477f) <= 0.0001f &&
+                MathF.Abs(
+                    migratedFourPaw.Configuration.Behavior.LostGripFall
+                        .AccelerationRampDuration - 0.31f) <= 0.0001f &&
+                MathF.Abs(
+                    migratedFourPaw.Configuration.Behavior.LostGripFall
+                        .InitialAccelerationRatio - 0.29f) <= 0.0001f &&
+                MathF.Abs(migratedFourPaw.Configuration.Physics.Gravity - 777f) <=
+                    0.0001f &&
+                MathF.Abs(
+                    migratedFourPaw.Configuration.Physics
+                        .RegripFrontReachLengthFactor - 0.63f) <= 0.0001f &&
+                MathF.Abs(
+                    migratedFourPaw.Configuration.Physics
+                        .RegripFrontReachOutwardWeight - 0.21f) <= 0.0001f &&
+                MathF.Abs(
+                    migratedFourPaw.Configuration.Physics
+                        .RegripContactHoldFraction - 0.37f) <= 0.0001f &&
+                MathF.Abs(
+                    migratedFourPaw.Configuration.Physics
+                        .RegripRearReachLengthFactor -
+                    LizardConfiguration.Default.Physics
+                        .RegripRearReachLengthFactor) <= 0.0001f &&
+                MathF.Abs(
+                    migratedFourPaw.Configuration.Physics
+                        .RegripRearReachOutwardWeight -
+                    LizardConfiguration.Default.Physics
+                        .RegripRearReachOutwardWeight) <= 0.0001f &&
+                migratedFourPawPhysics.ContainsKey(
+                    "RegripRearReachLengthFactor") &&
+                migratedFourPawPhysics.ContainsKey(
+                    "RegripRearReachOutwardWeight");
+            schemaMigrationPassed =
+                schemaMigrationPassed && schema7FourPawMigrationPassed;
+            if (!schema7FourPawMigrationPassed)
+            {
+                failures.Add(
+                    "schema7-four-paw-migration(" +
+                    $"loaded={migratedFourPaw.LoadedFromDisk}," +
+                    $"warnings={migratedFourPaw.Warnings.Count}," +
+                    $"version={migratedFourPaw.Configuration.SchemaVersion}," +
+                    $"front={migratedFourPaw.Configuration.Physics.RegripFrontReachLengthFactor:R}/" +
+                    $"{migratedFourPaw.Configuration.Physics.RegripFrontReachOutwardWeight:R}," +
+                    $"rear={migratedFourPaw.Configuration.Physics.RegripRearReachLengthFactor:R}/" +
+                    $"{migratedFourPaw.Configuration.Physics.RegripRearReachOutwardWeight:R})");
+            }
+            warningCount += migratedFourPaw.Warnings.Count;
+
+            var fullSchema7Path = Path.Combine(
+                root,
+                "legacy-four-paw-full-v7.json");
+            var fullSchema7 = LizardConfiguration.Default with
+            {
+                SchemaVersion = 7,
+                IndividualSeed = 86424,
+                Runtime = LizardConfiguration.Default.Runtime with
+                {
+                    SimulationRate = 144f,
+                    DebugPanelWidthPixels = 372
+                },
+                Behavior = LizardConfiguration.Default.Behavior with
+                {
+                    LostGripFall =
+                        LizardConfiguration.Default.Behavior.LostGripFall with
+                        {
+                            ReachLeadDistance = 63f,
+                            Gravity = 489f,
+                            AccelerationRampDuration = 0.33f,
+                            InitialAccelerationRatio = 0.27f
+                        }
+                },
+                Physics = LizardConfiguration.Default.Physics with
+                {
+                    Gravity = 812f,
+                    RegripFrontReachLengthFactor = 0.67f,
+                    RegripFrontReachOutwardWeight = 0.23f,
+                    RegripContactHoldFraction = 0.35f,
+                    // Deliberately different: schema 7 never owned these
+                    // values, and the JSON members below are removed.
+                    RegripRearReachLengthFactor = 0.11f,
+                    RegripRearReachOutwardWeight = 0.89f
+                }
+            };
+            var fullSchema7Node = JsonSerializer
+                .SerializeToNode(fullSchema7)!
+                .AsObject();
+            var fullSchema7Physics = fullSchema7Node["Physics"]!.AsObject();
+            fullSchema7Physics.Remove("RegripRearReachLengthFactor");
+            fullSchema7Physics.Remove("RegripRearReachOutwardWeight");
+            File.WriteAllText(fullSchema7Path, fullSchema7Node.ToJsonString());
+            var migratedFullSchema7 = LizardConfigurationStore.LoadOrCreate(
+                fullSchema7Path);
+            var expectedFullSchema8 = fullSchema7 with
+            {
+                SchemaVersion = LizardConfiguration.CurrentSchemaVersion,
+                Physics = fullSchema7.Physics with
+                {
+                    RegripRearReachLengthFactor =
+                        PhysicsConfiguration.DefaultRegripRearReachLengthFactor,
+                    RegripRearReachOutwardWeight =
+                        PhysicsConfiguration.DefaultRegripRearReachOutwardWeight
+                }
+            };
+            var fullSchema7Preserved =
+                migratedFullSchema7.LoadedFromDisk &&
+                migratedFullSchema7.Warnings.Count == 1 &&
+                JsonNode.DeepEquals(
+                    JsonSerializer.SerializeToNode(
+                        migratedFullSchema7.Configuration),
+                    JsonSerializer.SerializeToNode(expectedFullSchema8));
+            schemaMigrationPassed &= fullSchema7Preserved;
+            if (!fullSchema7Preserved)
+            {
+                failures.Add(
+                    "schema7-full-value-preservation(" +
+                    $"loaded={migratedFullSchema7.LoadedFromDisk}," +
+                    $"warnings={migratedFullSchema7.Warnings.Count}," +
+                    $"version={migratedFullSchema7.Configuration.SchemaVersion}," +
+                    $"seed={migratedFullSchema7.Configuration.IndividualSeed})");
+            }
+            warningCount += migratedFullSchema7.Warnings.Count;
+
             var invalidPath = Path.Combine(root, "invalid.json");
             const string invalidDocument = "{\"SchemaVersion\":999,\"IndividualSeed\":17}";
             File.WriteAllText(invalidPath, invalidDocument);
@@ -471,6 +663,98 @@ internal static class ConfigurationSelfTest
             invalidFilePreserved =
                 invalidFilePreserved &&
                 string.Equals(File.ReadAllText(nullPath), nullDocument, StringComparison.Ordinal);
+
+            var overflowScalePath = Path.Combine(root, "invalid-overflow-scale.json");
+            var overflowScaleDocument =
+                $"{{\"SchemaVersion\":{LizardConfiguration.CurrentSchemaVersion}," +
+                "\"IndividualSeed\":19001," +
+                "\"Appearance\":{\"VisualScale\":1e38}}";
+            File.WriteAllText(overflowScalePath, overflowScaleDocument);
+            var overflowScale = LizardConfigurationStore.LoadOrCreate(overflowScalePath);
+            warningCount += overflowScale.Warnings.Count;
+
+            var oversizedLogicalSurfacePath = Path.Combine(
+                root,
+                "invalid-oversized-logical-surface.json");
+            var oversizedLogicalSurfaceDocument =
+                $"{{\"SchemaVersion\":{LizardConfiguration.CurrentSchemaVersion}," +
+                "\"IndividualSeed\":19002," +
+                "\"Appearance\":{\"VisualScale\":30}}";
+            File.WriteAllText(
+                oversizedLogicalSurfacePath,
+                oversizedLogicalSurfaceDocument);
+            var oversizedLogicalSurface = LizardConfigurationStore.LoadOrCreate(
+                oversizedLogicalSurfacePath);
+            warningCount += oversizedLogicalSurface.Warnings.Count;
+
+            var oversizedModelSurfacePath = Path.Combine(
+                root,
+                "invalid-oversized-model-surface.json");
+            var oversizedModelSurfaceDocument =
+                $"{{\"SchemaVersion\":{LizardConfiguration.CurrentSchemaVersion}," +
+                "\"IndividualSeed\":19003," +
+                "\"Appearance\":{\"RenderCanvasSize\":20000,\"VisualScale\":0.1}}";
+            File.WriteAllText(oversizedModelSurfacePath, oversizedModelSurfaceDocument);
+            var oversizedModelSurface = LizardConfigurationStore.LoadOrCreate(
+                oversizedModelSurfacePath);
+            warningCount += oversizedModelSurface.Warnings.Count;
+
+            // Resolving the fallback profile is the last configuration-side
+            // boundary before application composition. It must be safe for
+            // every rejected extreme document, not merely deserialize.
+            var fallbackProfiles = new[]
+            {
+                LizardConfigurationStore.ResolveProfile(overflowScale),
+                LizardConfigurationStore.ResolveProfile(oversizedLogicalSurface),
+                LizardConfigurationStore.ResolveProfile(oversizedModelSurface)
+            };
+            derivedGeometryFallbackPassed =
+                new[]
+                {
+                    (overflowScale, overflowScalePath, overflowScaleDocument),
+                    (oversizedLogicalSurface,
+                        oversizedLogicalSurfacePath,
+                        oversizedLogicalSurfaceDocument),
+                    (oversizedModelSurface,
+                        oversizedModelSurfacePath,
+                        oversizedModelSurfaceDocument)
+                }.All(item =>
+                    !item.Item1.LoadedFromDisk &&
+                    item.Item1.Warnings.Count == 1 &&
+                    string.Equals(
+                        File.ReadAllText(item.Item2),
+                        item.Item3,
+                        StringComparison.Ordinal)) &&
+                fallbackProfiles.All(profile =>
+                    profile.Source.Validate().Count == 0 &&
+                    float.IsFinite(
+                        profile.Appearance.RenderCanvasSize *
+                        profile.Appearance.VisualScale));
+            invalidFallbackPassed = invalidFallbackPassed && derivedGeometryFallbackPassed;
+            invalidFilePreserved = invalidFilePreserved && derivedGeometryFallbackPassed;
+
+            var undersizedCatchUpPath = Path.Combine(
+                root,
+                "invalid-undersized-frame-catch-up.json");
+            var undersizedCatchUpDocument =
+                $"{{\"SchemaVersion\":{LizardConfiguration.CurrentSchemaVersion}," +
+                "\"IndividualSeed\":19004," +
+                "\"Runtime\":{\"MaximumFrameCatchUp\":0.005}}";
+            File.WriteAllText(undersizedCatchUpPath, undersizedCatchUpDocument);
+            var undersizedCatchUp = LizardConfigurationStore.LoadOrCreate(
+                undersizedCatchUpPath);
+            warningCount += undersizedCatchUp.Warnings.Count;
+            invalidFallbackPassed =
+                invalidFallbackPassed &&
+                !undersizedCatchUp.LoadedFromDisk &&
+                undersizedCatchUp.Warnings.Count == 1 &&
+                undersizedCatchUp.Configuration.Validate().Count == 0;
+            invalidFilePreserved =
+                invalidFilePreserved &&
+                string.Equals(
+                    File.ReadAllText(undersizedCatchUpPath),
+                    undersizedCatchUpDocument,
+                    StringComparison.Ordinal);
 
             var typoPath = Path.Combine(root, "invalid-typo.json");
             const string typoDocument =
@@ -559,6 +843,12 @@ internal static class ConfigurationSelfTest
             profiles.Any(profile => MathF.Abs(
                 profile.Physics.RegripFrontReachOutwardWeight -
                 variationConfiguration.Physics.RegripFrontReachOutwardWeight) > 0.0001f) &&
+            profiles.Any(profile => MathF.Abs(
+                profile.Physics.RegripRearReachLengthFactor -
+                variationConfiguration.Physics.RegripRearReachLengthFactor) > 0.0001f) &&
+            profiles.Any(profile => MathF.Abs(
+                profile.Physics.RegripRearReachOutwardWeight -
+                variationConfiguration.Physics.RegripRearReachOutwardWeight) > 0.0001f) &&
             profiles.Any(profile => MathF.Abs(
                 profile.Physics.RegripContactHoldFraction -
                 variationConfiguration.Physics.RegripContactHoldFraction) > 0.0001f) &&
@@ -692,6 +982,20 @@ internal static class ConfigurationSelfTest
             }).Validate().Count > 0;
         var defaultFall = LizardConfiguration.Default.Behavior.LostGripFall;
         var defaultPhysics = LizardConfiguration.Default.Physics;
+        var minimumCatchPreparationDistance =
+            3f * defaultFall.MaximumFallVelocity /
+            LizardConfiguration.Default.Runtime.SimulationRate;
+        var catchPreparationBoundaryConfiguration = LizardConfiguration.Default with
+        {
+            Behavior = LizardConfiguration.Default.Behavior with
+            {
+                LostGripFall = defaultFall with
+                {
+                    MinimumDistance = minimumCatchPreparationDistance,
+                    ReachLeadDistance = minimumCatchPreparationDistance
+                }
+            }
+        };
         var lostGripConfigurationPassed =
             CreateConfigurationWithAfterForwardAction(AutonomousAction.LostGripFall)
                 .Validate().Count == 0 &&
@@ -748,6 +1052,8 @@ internal static class ConfigurationSelfTest
                 {
                     RegripFrontReachLengthFactor = 0f,
                     RegripFrontReachOutwardWeight = 1f,
+                    RegripRearReachLengthFactor = 0f,
+                    RegripRearReachOutwardWeight = 1f,
                     RegripContactHoldFraction = 0.8f
                 }
             }).Validate().Count == 0 &&
@@ -758,6 +1064,14 @@ internal static class ConfigurationSelfTest
             (LizardConfiguration.Default with
             {
                 Physics = defaultPhysics with { RegripFrontReachOutwardWeight = -0.01f }
+            }).Validate().Count > 0 &&
+            (LizardConfiguration.Default with
+            {
+                Physics = defaultPhysics with { RegripRearReachLengthFactor = 1.01f }
+            }).Validate().Count > 0 &&
+            (LizardConfiguration.Default with
+            {
+                Physics = defaultPhysics with { RegripRearReachOutwardWeight = -0.01f }
             }).Validate().Count > 0 &&
             (LizardConfiguration.Default with
             {
@@ -772,6 +1086,27 @@ internal static class ConfigurationSelfTest
                         RegripReachAgility = 1.01f,
                         RegripOutwardCuriosity = 1.01f,
                         RegripHoldCalmness = 1.01f
+                    }
+                }
+            }).Validate().Count > 0 &&
+            catchPreparationBoundaryConfiguration.Validate().Count == 0 &&
+            (catchPreparationBoundaryConfiguration with
+            {
+                Behavior = catchPreparationBoundaryConfiguration.Behavior with
+                {
+                    LostGripFall = catchPreparationBoundaryConfiguration.Behavior.LostGripFall with
+                    {
+                        MinimumDistance = minimumCatchPreparationDistance - 0.01f
+                    }
+                }
+            }).Validate().Count > 0 &&
+            (catchPreparationBoundaryConfiguration with
+            {
+                Behavior = catchPreparationBoundaryConfiguration.Behavior with
+                {
+                    LostGripFall = catchPreparationBoundaryConfiguration.Behavior.LostGripFall with
+                    {
+                        ReachLeadDistance = minimumCatchPreparationDistance - 0.01f
                     }
                 }
             }).Validate().Count > 0;
@@ -863,6 +1198,44 @@ internal static class ConfigurationSelfTest
                         LizardConfiguration.Default.Physics.MaximumSimulationStep * 2f
                 }
             }).Validate().Count > 0;
+        var frameCatchUpBoundsPassed =
+            (LizardConfiguration.Default with
+            {
+                Runtime = LizardConfiguration.Default.Runtime with
+                {
+                    MaximumFrameCatchUp = RuntimeConfiguration.MinimumFrameCatchUpSeconds
+                }
+            }).Validate().Count == 0 &&
+            (LizardConfiguration.Default with
+            {
+                Runtime = LizardConfiguration.Default.Runtime with
+                {
+                    MaximumFrameCatchUp = RuntimeConfiguration.MaximumFrameCatchUpSeconds
+                }
+            }).Validate().Count == 0 &&
+            (LizardConfiguration.Default with
+            {
+                Runtime = LizardConfiguration.Default.Runtime with
+                {
+                    MaximumFrameCatchUp = 0.005f
+                }
+            }).Validate().Count > 0 &&
+            (LizardConfiguration.Default with
+            {
+                Runtime = LizardConfiguration.Default.Runtime with
+                {
+                    MaximumFrameCatchUp = MathF.BitDecrement(
+                        RuntimeConfiguration.MinimumFrameCatchUpSeconds)
+                }
+            }).Validate().Count > 0 &&
+            (LizardConfiguration.Default with
+            {
+                Runtime = LizardConfiguration.Default.Runtime with
+                {
+                    MaximumFrameCatchUp = MathF.BitIncrement(
+                        RuntimeConfiguration.MaximumFrameCatchUpSeconds)
+                }
+            }).Validate().Count > 0;
 
         var defaultEnvelope = LizardGeometryEnvelope.Calculate(
             LizardConfiguration.Default.Appearance,
@@ -909,6 +1282,54 @@ internal static class ConfigurationSelfTest
             defaultEnvelope.DanglingModelRadius &&
             configuredGeometryRejected &&
             variedProfilesFit;
+        var derivedGeometryBoundsPassed =
+            derivedGeometryFallbackPassed &&
+            (LizardConfiguration.Default with
+            {
+                Appearance = LizardConfiguration.Default.Appearance with
+                {
+                    VisualScale = 1e38f
+                }
+            }).Validate().Count > 0 &&
+            (LizardConfiguration.Default with
+            {
+                Appearance = LizardConfiguration.Default.Appearance with
+                {
+                    VisualScale = 30f
+                }
+            }).Validate().Count > 0 &&
+            (LizardConfiguration.Default with
+            {
+                Appearance = LizardConfiguration.Default.Appearance with
+                {
+                    RenderCanvasSize = 20_000f,
+                    VisualScale = 0.1f
+                }
+            }).Validate().Count > 0 &&
+            (LizardConfiguration.Default with
+            {
+                Appearance = LizardConfiguration.Default.Appearance with
+                {
+                    HeadAnchorOffset = 1e38f
+                }
+            }).Validate().Count > 0 &&
+            (LizardConfiguration.Default with
+            {
+                Runtime = LizardConfiguration.Default.Runtime with
+                {
+                    NavigationMarginModel = 30_000f
+                }
+            }).Validate().Count > 0 &&
+            (LizardConfiguration.Default with
+            {
+                Behavior = LizardConfiguration.Default.Behavior with
+                {
+                    LostGripFall = LizardConfiguration.Default.Behavior.LostGripFall with
+                    {
+                        BottomSafetyInset = 20_000f
+                    }
+                }
+            }).Validate().Count > 0;
 
         const int variationControlSeed = 0x4C5A31;
         var exactRestConfiguration = LizardConfiguration.Default with
@@ -991,6 +1412,14 @@ internal static class ConfigurationSelfTest
             BitConverter.SingleToInt32Bits(
                 zeroRegripCoefficientProfile.Physics.RegripFrontReachOutwardWeight) &&
             BitConverter.SingleToInt32Bits(
+                zeroRegripCoefficientConfiguration.Physics.RegripRearReachLengthFactor) ==
+            BitConverter.SingleToInt32Bits(
+                zeroRegripCoefficientProfile.Physics.RegripRearReachLengthFactor) &&
+            BitConverter.SingleToInt32Bits(
+                zeroRegripCoefficientConfiguration.Physics.RegripRearReachOutwardWeight) ==
+            BitConverter.SingleToInt32Bits(
+                zeroRegripCoefficientProfile.Physics.RegripRearReachOutwardWeight) &&
+            BitConverter.SingleToInt32Bits(
                 zeroRegripCoefficientConfiguration.Physics.RegripContactHoldFraction) ==
             BitConverter.SingleToInt32Bits(
                 zeroRegripCoefficientProfile.Physics.RegripContactHoldFraction);
@@ -1004,6 +1433,10 @@ internal static class ConfigurationSelfTest
         AddFailure(roundTripPassed, "round-trip", failures);
         AddFailure(persistentSeedPassed, "persistent-seed", failures);
         AddFailure(schemaMigrationPassed, "schema-migration", failures);
+        AddFailure(
+            persistenceFailurePreservesValidConfig,
+            "write-back-failure-preserves-valid-config",
+            failures);
         AddFailure(invalidFallbackPassed, "invalid-fallback", failures);
         AddFailure(invalidFilePreserved, "invalid-file-preservation", failures);
         AddFailure(deterministicProfilePassed, "deterministic-profile", failures);
@@ -1017,7 +1450,9 @@ internal static class ConfigurationSelfTest
         AddFailure(hardLimitsPassed, "hard-limit-validation", failures);
         AddFailure(unknownPropertyRejected, "unknown-property-rejection", failures);
         AddFailure(timeStepDeterminismPassed, "time-step-determinism", failures);
+        AddFailure(frameCatchUpBoundsPassed, "frame-catch-up-bounds", failures);
         AddFailure(geometryEnvelopePassed, "geometry-envelope", failures);
+        AddFailure(derivedGeometryBoundsPassed, "derived-geometry-bounds", failures);
         AddFailure(individualVariationControlsPassed, "individual-variation-controls", failures);
         AddFailure(lostGripConfigurationPassed, "lost-grip-configuration", failures);
 
@@ -1026,6 +1461,7 @@ internal static class ConfigurationSelfTest
             roundTripPassed,
             persistentSeedPassed,
             schemaMigrationPassed,
+            persistenceFailurePreservesValidConfig,
             invalidFallbackPassed,
             invalidFilePreserved,
             deterministicProfilePassed,
@@ -1038,7 +1474,9 @@ internal static class ConfigurationSelfTest
             hardLimitsPassed,
             unknownPropertyRejected,
             timeStepDeterminismPassed,
+            frameCatchUpBoundsPassed,
             geometryEnvelopePassed,
+            derivedGeometryBoundsPassed,
             individualVariationControlsPassed,
             lostGripConfigurationPassed,
             warningCount,
@@ -1085,6 +1523,8 @@ internal static class ConfigurationSelfTest
             {
                 RegripFrontReachLengthFactor = 0.77f,
                 RegripFrontReachOutwardWeight = 0.29f,
+                RegripRearReachLengthFactor = 0.73f,
+                RegripRearReachOutwardWeight = 0.41f,
                 RegripContactHoldFraction = 0.24f
             },
             Runtime = defaults.Runtime with { DebugPathCapacity = 77 }
@@ -1147,6 +1587,8 @@ internal static class ConfigurationSelfTest
         profile.Physics.Gravity.ToString("R"),
         profile.Physics.RegripFrontReachLengthFactor.ToString("R"),
         profile.Physics.RegripFrontReachOutwardWeight.ToString("R"),
+        profile.Physics.RegripRearReachLengthFactor.ToString("R"),
+        profile.Physics.RegripRearReachOutwardWeight.ToString("R"),
         profile.Physics.RegripContactHoldFraction.ToString("R"),
         profile.Appearance.SpineLinkLength.ToString("R"),
         profile.SecondaryMotion.IdleTailAmplitude.ToString("R"),
@@ -1167,6 +1609,7 @@ internal static class ConfigurationSelfTest
             .AddCheck("JSON round-trip", result.RoundTripPassed, "true", result.RoundTripPassed.ToString())
             .AddCheck("generated seed persists", result.PersistentSeedPassed, "true", result.PersistentSeedPassed.ToString())
             .AddCheck("legacy schema migrates", result.SchemaMigrationPassed, "true", result.SchemaMigrationPassed.ToString())
+            .AddCheck("write-back failure preserves valid configuration", result.PersistenceFailurePreservesValidConfig, "true", result.PersistenceFailurePreservesValidConfig.ToString())
             .AddCheck("invalid JSON falls back", result.InvalidFallbackPassed, "true", result.InvalidFallbackPassed.ToString())
             .AddCheck("invalid file is preserved", result.InvalidFilePreserved, "true", result.InvalidFilePreserved.ToString())
             .AddCheck("same seed is deterministic", result.DeterministicProfilePassed, "true", result.DeterministicProfilePassed.ToString())
@@ -1179,7 +1622,9 @@ internal static class ConfigurationSelfTest
             .AddCheck("capacity and candidate hard limits", result.HardLimitsPassed, "true", result.HardLimitsPassed.ToString())
             .AddCheck("unknown JSON properties are rejected", result.UnknownPropertyRejected, "true", result.UnknownPropertyRejected.ToString())
             .AddCheck("fixed time-step configuration is deterministic", result.TimeStepDeterminismPassed, "true", result.TimeStepDeterminismPassed.ToString())
+            .AddCheck("frame catch-up window covers at least 30 Hz", result.FrameCatchUpBoundsPassed, "true", result.FrameCatchUpBoundsPassed.ToString())
             .AddCheck("configured geometry fits render surfaces", result.GeometryEnvelopePassed, "true", result.GeometryEnvelopePassed.ToString())
+            .AddCheck("derived geometry is finite and practically bounded", result.DerivedGeometryBoundsPassed, "true", result.DerivedGeometryBoundsPassed.ToString())
             .AddCheck("individual variation controls can be disabled exactly", result.IndividualVariationControlsPassed, "true", result.IndividualVariationControlsPassed.ToString())
             .AddCheck("lost-grip parameters and matrix entries validate", result.LostGripConfigurationPassed, "true", result.LostGripConfigurationPassed.ToString())
             .AddCheck("no unexpected failures", string.IsNullOrEmpty(result.FailureDetails), "empty", result.FailureDetails)
