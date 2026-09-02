@@ -4,6 +4,8 @@ using DesktopLizard.Diagnostics;
 var suites = new (string Name, Func<SuiteOutcome> Run)[]
 {
     (nameof(ConfigurationSelfTest), () => FromResult(ConfigurationSelfTest.Run(), result => result.Passed)),
+    (nameof(PointerSchemaCompatibilitySelfTest), () =>
+        FromResult(PointerSchemaCompatibilitySelfTest.Run(), result => result.Passed)),
     (nameof(GaitSelfTest), () => FromResult(GaitSelfTest.Run(), result => result.Passed)),
     (nameof(GrabReleaseSelfTest), () => FromResult(GrabReleaseSelfTest.Run(), result => result.Passed)),
     (nameof(LivenessSelfTest), () => FromResult(LivenessSelfTest.Run(), result => result.Passed)),
@@ -32,7 +34,11 @@ var suites = new (string Name, Func<SuiteOutcome> Run)[]
     (nameof(RebaseAndResetSelfTest), () =>
         FromResult(RebaseAndResetSelfTest.Run(), result => result.Passed)),
     (nameof(PortableDebugBridgeSelfTest), () =>
-        FromResult(PortableDebugBridgeSelfTest.Run(), result => result.Passed))
+        FromResult(PortableDebugBridgeSelfTest.Run(), result => result.Passed)),
+    (nameof(BreedingDomainSelfTest), () =>
+        FromResult(BreedingDomainSelfTest.Run(), result => result.Passed)),
+    (nameof(BreedablePhenotypeCompilerSelfTest), () =>
+        FromResult(BreedablePhenotypeCompilerSelfTest.Run(), result => result.Passed))
 };
 
 var failures = 0;

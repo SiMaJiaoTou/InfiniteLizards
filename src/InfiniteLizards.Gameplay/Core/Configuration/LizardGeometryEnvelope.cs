@@ -1,4 +1,5 @@
 using System.Numerics;
+using InfiniteLizards.Gameplay.Phenotypes;
 
 namespace DesktopLizard.Core;
 
@@ -29,7 +30,8 @@ internal readonly record struct LizardGeometryEnvelope(
         AppearanceConfiguration appearance,
         GaitConfiguration gait,
         SecondaryMotionConfiguration secondaryMotion,
-        RenderingConfiguration rendering)
+        RenderingConfiguration rendering,
+        BreedableVisualPhenotype? visualPhenotype = null)
     {
         ArgumentNullException.ThrowIfNull(appearance);
         ArgumentNullException.ThrowIfNull(gait);
@@ -64,9 +66,13 @@ internal readonly record struct LizardGeometryEnvelope(
         var maximumEyeRadius = MathF.Max(
             MathF.Max(rendering.EyeShadowRadius, rendering.EyeRadius),
             rendering.PupilOffset + maximumPupilRadius);
+        var visualDecorationExtent = CalculateVisualDecorationExtent(
+            visualPhenotype,
+            maximumBodyWidth,
+            rendering.NoseRadius);
         var maximumDecorationRadius = MathF.Max(
             MathF.Max(rendering.NoseRadius, maximumEyeRadius),
-            maximumFootRadius);
+            MathF.Max(maximumFootRadius, visualDecorationExtent));
 
         var normalRadius = 0f;
         for (var index = 0; index < bodyWidths.Length; index++)
@@ -94,7 +100,8 @@ internal readonly record struct LizardGeometryEnvelope(
         normalRadius = MathF.Max(
             normalRadius,
             LegRadius(RearShoulderIndex, gait.RearLegLinkLength));
-        normalRadius += shadowTravel + RasterSafetyMargin;
+        normalRadius += MathF.Max(shadowTravel, visualDecorationExtent) +
+                        RasterSafetyMargin;
 
         // A dangling pose can be grabbed at either end of the topology. Its
         // farthest drawable point is therefore a full spine span plus the
@@ -124,6 +131,60 @@ internal readonly record struct LizardGeometryEnvelope(
             var reach = linkLength * gait.MaximumReachFactor;
             return longitudinal + shoulderOffset + reach + maximumFootRadius;
         }
+    }
+
+    private static float CalculateVisualDecorationExtent(
+        BreedableVisualPhenotype? visual,
+        float maximumBodyWidth,
+        float noseRadius)
+    {
+        if (visual is null)
+        {
+            return 0f;
+        }
+
+        var extent = 0f;
+        if (visual.Appendages.DorsalFin.IsPresent)
+        {
+            extent = MathF.Max(
+                extent,
+                maximumBodyWidth * visual.Appendages.DorsalFin.HeightRatio);
+        }
+        if (visual.Appendages.NeckFrill.IsPresent)
+        {
+            extent = MathF.Max(
+                extent,
+                maximumBodyWidth * visual.Appendages.NeckFrill.SizeRatio);
+        }
+        if (visual.Appendages.Whiskers.IsPresent)
+        {
+            extent = MathF.Max(
+                extent,
+                noseRadius * 2f * visual.Appendages.Whiskers.LengthRatio);
+        }
+        if (visual.Tail.Sail.IsPresent)
+        {
+            extent = MathF.Max(
+                extent,
+                maximumBodyWidth * visual.Tail.Sail.HeightRatio);
+        }
+        if (visual.Tail.Spikes.IsPresent)
+        {
+            extent = MathF.Max(
+                extent,
+                maximumBodyWidth * visual.Tail.Spikes.SizeRatio);
+        }
+        if (visual.Tail.Club.IsPresent)
+        {
+            extent = MathF.Max(
+                extent,
+                noseRadius *
+                (visual.Tail.Club.SizeRatio + visual.Tail.Club.SpikeLengthRatio));
+        }
+
+        return float.IsFinite(extent) && extent >= 0f
+            ? extent
+            : 0f;
     }
 
     public AppearanceConfiguration EnsureCanvasCapacity(AppearanceConfiguration appearance)

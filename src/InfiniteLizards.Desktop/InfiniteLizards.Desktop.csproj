@@ -27,6 +27,10 @@
   </ItemGroup>
 
   <ItemGroup>
+    <AvaloniaResource Include="Assets/UI/**" />
+  </ItemGroup>
+
+  <ItemGroup>
     <InternalsVisibleTo Include="InfiniteLizards.Desktop.SelfTests" />
   </ItemGroup>
 </Project>

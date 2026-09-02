@@ -1,3 +1,6 @@
+using InfiniteLizards.Gameplay.Genetics;
+using InfiniteLizards.Gameplay.Phenotypes;
+
 namespace DesktopLizard.Core;
 
 /// <summary>
@@ -41,7 +44,8 @@ internal sealed record LizardProfile(
     AppearanceConfiguration Appearance,
     SecondaryMotionConfiguration SecondaryMotion,
     RenderingConfiguration Rendering,
-    RuntimeConfiguration Runtime)
+    RuntimeConfiguration Runtime,
+    BreedableVisualPhenotype? VisualPhenotype = null)
 {
     public static LizardProfile Default { get; } = IndividualProfileFactory.Create(
         LizardConfiguration.Default,
@@ -83,6 +87,58 @@ internal static class IndividualProfileFactory
                 configuration.Runtime);
         }
 
+        return CreateVariedProfile(
+            configuration,
+            traits,
+            sourcePhenotype: null,
+            visualPhenotype: null);
+    }
+
+    /// <summary>
+    /// Resolves one persistent genome into a runtime profile. Supplying no
+    /// behavior seed derives a stable seed from canonical genome contents.
+    /// </summary>
+    public static LizardProfile CreateFromGenome(
+        LizardConfiguration configuration,
+        LizardGenome genome,
+        LizardTraitRegistry? registry = null,
+        int? behaviorSeed = null)
+    {
+        ArgumentNullException.ThrowIfNull(genome);
+        registry ??= LizardTraitRegistry.Default;
+        var phenotype = registry.Express(genome);
+        return CreateFromPhenotype(
+            configuration,
+            phenotype,
+            behaviorSeed ?? DeriveStableSeed(genome));
+    }
+
+    /// <summary>
+    /// Entry point used when the application layer already retained the
+    /// expressed phenotype for details/lifecycle presentation.
+    /// </summary>
+    public static LizardProfile CreateFromPhenotype(
+        LizardConfiguration configuration,
+        LizardPhenotype phenotype,
+        int behaviorSeed)
+    {
+        ArgumentNullException.ThrowIfNull(configuration);
+        ArgumentNullException.ThrowIfNull(phenotype);
+        configuration.EnsureValid();
+        var identity = CreateTraits(behaviorSeed);
+        var traits = BreedablePhenotypeProfileResolver.ResolveTraits(
+            identity,
+            phenotype);
+        var visual = BreedablePhenotypeCompiler.CompileVisual(phenotype);
+        return CreateVariedProfile(configuration, traits, phenotype, visual);
+    }
+
+    private static LizardProfile CreateVariedProfile(
+        LizardConfiguration configuration,
+        IndividualTraits traits,
+        LizardPhenotype? sourcePhenotype,
+        BreedableVisualPhenotype? visualPhenotype)
+    {
         var variation = configuration.IndividualVariation;
         var context = IndividualVariationContext.Create(traits, variation);
         var behavior = IndividualBehaviorProfileResolver.Resolve(
@@ -103,11 +159,32 @@ internal static class IndividualProfileFactory
         var rendering = IndividualAppearanceProfileResolver.ResolveRendering(
             configuration.Rendering,
             context);
+        if (sourcePhenotype is not null && visualPhenotype is not null)
+        {
+            behavior = BreedablePhenotypeProfileResolver.ResolveBehavior(
+                behavior,
+                sourcePhenotype,
+                configuration.Runtime.SimulationRate);
+            gait = BreedablePhenotypeProfileResolver.ResolveGait(
+                gait,
+                sourcePhenotype);
+            appearance = BreedablePhenotypeProfileResolver.ResolveAppearance(
+                appearance,
+                visualPhenotype);
+            secondaryMotion = BreedablePhenotypeProfileResolver.ResolveSecondaryMotion(
+                secondaryMotion,
+                sourcePhenotype,
+                visualPhenotype);
+            rendering = BreedablePhenotypeProfileResolver.ResolveRendering(
+                rendering,
+                visualPhenotype);
+        }
         var envelope = LizardGeometryEnvelope.Calculate(
             appearance,
             gait,
             secondaryMotion,
-            rendering);
+            rendering,
+            visualPhenotype);
         appearance = envelope.EnsureCanvasCapacity(appearance);
         var requiredFallSafetyInset = envelope.RequiredFallBottomSafetyInset(
             appearance,
@@ -146,7 +223,8 @@ internal static class IndividualProfileFactory
             appearance,
             secondaryMotion,
             rendering,
-            configuration.Runtime);
+            configuration.Runtime,
+            visualPhenotype);
     }
 
     private static IndividualTraits CreateTraits(int seed)
@@ -175,4 +253,38 @@ internal static class IndividualProfileFactory
         return ((float)random.NextDouble() + (float)random.NextDouble()) * 0.5f;
     }
 
+    private static int DeriveStableSeed(LizardGenome genome)
+    {
+        const ulong offset = 14695981039346656037UL;
+        const ulong prime = 1099511628211UL;
+        var hash = offset;
+
+        MixText(genome.RegistryId);
+        Mix(unchecked((ulong)genome.SchemaVersion));
+        foreach (var gene in genome.Genes)
+        {
+            MixText(gene.TraitId);
+            Mix(unchecked((ulong)BitConverter.DoubleToInt64Bits(gene.FirstAllele)));
+            Mix(unchecked((ulong)BitConverter.DoubleToInt64Bits(gene.SecondAllele)));
+        }
+
+        return unchecked((int)(hash ^ (hash >> 32)));
+
+        void MixText(string value)
+        {
+            foreach (var character in value)
+            {
+                Mix(character);
+            }
+        }
+
+        void Mix(ulong value)
+        {
+            for (var shift = 0; shift < 64; shift += 8)
+            {
+                hash ^= (byte)(value >> shift);
+                hash *= prime;
+            }
+        }
+    }
 }

@@ -9,16 +9,19 @@ flowchart LR
     Host["InfiniteLizards.Desktop<br/>Avalonia + Skia 宿主"] --> Runtime["DesktopPet.Engine<br/>DesktopPetRuntime + fixed step（默认 120 Hz）"]
     Host --> Presenter["Desktop presenter/view<br/>不可变快照 → 共享几何"]
     Host --> Native["Platform adapters<br/>Win32 / AppKit + Quartz"]
+    Host --> Manager["Management + Persistence<br/>家园 UI、壁钟、离线存档"]
+    Manager --> Breeding["Gameplay Breeding<br/>基因、生命周期、经济"]
     Runtime --> Port["IDesktopPetGame&lt;TSnapshot&gt;<br/>只接收 fixed-step input"]
     Game["InfiniteLizards.Gameplay<br/>蜥蜴行为、动画、物理"] --> Port
     Game --> EngineTypes["DesktopPet.Engine<br/>world/display 值对象"]
+    Breeding --> Genetics["Trait registry + diploid genome<br/>表型与确定性随机流"]
 ```
 
 | 项目 | 拥有的职责 | 禁止依赖 |
 |---|---|---|
 | `DesktopPet.Engine` | `DesktopPetRuntime<TSnapshot>`、`IDesktopPetGame<TSnapshot>`、固定步进、逐屏 96-DIP 映射、有状态坐标帧切换、窗口放置值对象与插件边界校验 | Avalonia、Win32/AppKit、蜥蜴状态机 |
-| `InfiniteLizards.Gameplay` | 配置/Profile、行为 FSM、步态/IK、悬挂物理，以不可变 `LizardRenderFrame` 输出 | 窗口、显示帧 delta、DPI、鼠标 API、平台 P/Invoke |
-| `InfiniteLizards.Desktop` | composition root、显示帧采样、全局指针、点击穿透、窗口放置、Avalonia/Skia presenter/view | 不得拥有 fixed-step 累积器，不得实现 gameplay 状态转移和动画公式 |
+| `InfiniteLizards.Gameplay` | 配置/Profile、行为 FSM、步态/IK、悬挂物理，以不可变 `LizardRenderFrame` 输出；另拥有 trait registry、双等位基因、表型、繁育/生命周期/经济 aggregate | 窗口、显示帧 delta、DPI、壁钟、磁盘、鼠标 API、平台 P/Invoke |
+| `InfiniteLizards.Desktop` | composition root、显示帧采样、全局指针、点击穿透、窗口放置、Avalonia/Skia presenter/view；家园管理 UI、壁钟推进和 `breeding-world.json` 原子持久化 | 不得拥有 fixed-step 累积器，不得实现 gameplay 状态转移、遗传/经济规则和动画公式 |
 
 `LizardGameModule` 是蜥蜴 gameplay 对通用 Engine port 的实现。Desktop composition root 创建 game、`DesktopPetRuntime<LizardRenderFrame>` 与 presenter；`PetWindow<TSnapshot>` 持有 runtime 和 presenter，不持有原始 game port，也不能访问 `BehaviorController` 或物理内部状态。
 
@@ -27,6 +30,33 @@ flowchart LR
 失手回抓同样不泄漏到平台层：行为 FSM 仍只有 `Falling → Regripping`，并输出 `LostGripReachProgress` 与 `ReachedTarget / SafetyForced` 转换原因；`DanglingRig2D` 在自由落体粒子约束内为四条肢体分别计算抓点与 IK，`RegripPoseController` 以四位接触掩码原子管理表现层的 `Seeking → ContactHold → Recovering`。每条肢体默认锁定捕获时的 IK 弯曲支路，仅允许在接近完全伸直且相邻肘部连续时切换一次；切换后的中段若需要避开躯干，可使用逐步有界的安全投影，不能靠回滚停住脚掌。只有四足路径、终点和当前姿态都通过安全契约，并且四足都到达各自目标，最终移动子步才原子提交接触；下一静止子步保持抓点并恢复。Windows/macOS renderer 只消费同一份 `LizardRenderFrame`，不各自实现伸手动画。
 
 领域源码也遵守同一边界：蜥蜴 `Core` 和 gameplay `Application` 文件只存在并编译于 `src/InfiniteLizards.Gameplay`。旧 WPF 宿主通过 `ProjectReference` 消费该程序集，不再编译第二份领域类型；架构测试会拒绝 Gameplay 项目的任何外部 `Compile` glob 或 WPF 源码重复。
+
+## 繁育领域、时钟与事务边界
+
+透明桌宠模拟和家园繁育是两条独立时间线：
+
+- 桌宠仍由 Engine 的固定步进独占推进，消费 world-space 指针和工作区输入。
+- `BreedingSimulation` 只接受调用者显式传入的 `TimeSpan`，不读取壁钟、显示帧、DPI 或窗口。它持有金币、可繁育地点、蜥蜴、蛋和确定性随机状态，并输出不可变 snapshot/action result。
+- Desktop 的 `GameManagerWindow` 以一秒计时器把实际经过时间交给 `LizardBreedingManagementSource`；`BreedingWorldStore` 在加载时根据 envelope 的 UTC 时间结算最多 30 天离线成长。壁钟只存在于 Desktop 边界。
+- 买、卖和繁育都经 application facade 进入领域。管理 source 在内存快照上执行命令后 write-through；存档失败时恢复命令前快照。繁育 UI 的 A/B 槽只选择亲本，提交时先把两只亲本移动到同一个稳定 habitat ID，再执行领域层同地点校验和产蛋。
+
+管理窗口是独立、非模态、非置顶的普通可聚焦窗口，不把透明 `PetWindow` 设为 owner，因此不会与 Win32 `WS_DISABLED`/macOS non-activating surface 的输入所有权冲突。点击桌宠与抓取之间还有一个纯手势仲裁器：4 DIP 以内释放产生详情点击，超过阈值才调用 gameplay `BeginPrimaryInteraction`。
+
+## 遗传注册表与表型边界
+
+`LizardTraitRegistry.Default` 的 `infinite-lizards.genetics.v2` 注册 137 个 descriptor，覆盖 13 类玩家可读维度。每个基因位点保存两份 `[0,1]` allele；子代每个位点分别从两个亲本选择一份，再按 descriptor 独立突变。连续值越界反射、色相环绕并以圆周均值表达，开关翻转，choice 在相邻选项或爆发时全范围跳转。表达前置条件可隐藏但不删除 allele，因此允许隔代返祖。v2 为移除没有安全消费面的 `lifecycle.longevity` 提供 v1 完整 manifest 迁移；保留位点的 allele 逐位不变，已删除位点被明确丢弃。
+
+出生只消费一个根随机值；每个 trait 以稳定 ID 派生自己的 PCG32 子流。新增或重新排序 descriptor 不会改变现有 trait 的创始、遗传或突变结果。快照同时持久化根随机流的 state/increment，恢复后市场 stock、ID、名字和后代序列可以连续复现。
+
+注册表负责“可遗传、可突变、可保存、可在详情读出”，不是自动绘制器。`BreedablePhenotypeCompiler` 把视觉维度编译成有界、renderer-neutral contract；`BreedablePhenotypeProfileResolver` 把体型/步态、速度/加速度、抓附/下落、S 形摆动、休息分布和鼠标反应投射到已验证 runtime profile；纯函数 lifecycle resolver 决定个体冷却、双方共同贡献的孵化速度和幼体成熟速度。`DefaultTraitEffectCoverage.AllPlayerFacing` 必须与默认 registry ID 集合精确相等且无重复，因此未登记消费面的新 trait 会让集合测试失败；登记本身不是效果证明，新 trait 还必须增加对应的 low/high 或 consumer contract 可执行回归，不能只靠详情数字交付。
+
+结构拓扑尤其保持明确边界：方形肖像完整消费 renderer-neutral visual contract，支持 1–5 对腿、每腿 1–5 个可见关节、五类吻部和足型、颈褶/头角/头冠、背鳍/侧鳍/外鳃、趾爪/蹼/吸附垫、可变触须、皮肤质感、尾翼、尾节/柔性/分叉、可变尾刺和尾锤尖刺等组合；每类重复几何都有固定 primitive 上限，并以全低/全高保守 bounds 门禁保证不被方形画布裁切。`ProceduralLizard` 的实时行走、抓取、悬挂和失手回抓仍固定为四支撑腿、两段 IK。composition root 仍只创建一只透明桌宠：有收藏时从持久化的 active genome 构造，选择其他收藏个体则在下次启动生效；这不是多宠物 desktop fleet。完整维度、迁移流程和未实现项见 [BREEDING.md](BREEDING.md)。
+
+## 繁育存档边界
+
+`breeding-world.json` 与有效配置文件同目录，但和 `lizard-settings.json` 使用不同 schema。领域 snapshot 不包含壁钟、UI 图片、DPI 或平台坐标；Desktop envelope 单独记录 `SavedAtUtc` 与下一次启动使用的 active lizard ID。主文件以 `.tmp → 主文件` 替换并保留 `.bak`；主档失败会先严格读取备份，主备都失败才把坏文件改名为 `.invalid-*` 并创建新世界。恢复严格检查 world schema、registry ID、规则、经济、ID、随机状态、唯一实体 ID、时间范围和每个 genome；任何兼容 registry 升级都必须由精确 predecessor manifest 授权，不能悄悄忽略未显式声明的位点。
+
+详情 UI 通过 application facade 枚举 registry 的全部 trait，并使用基因哈希作为稳定 portrait key。实际方形肖像由 phenotype 数据现场绘制；孵化室另以 `EggPortraitView` 消费子代 `EggAppearance` 的蛋壳色相和六类花纹，并把孵化进度限制为表现层裂纹/内光。功能按钮消费图片生成模型制作并作为 Avalonia resource 打包的 4×4 atlas，通过 `BreedingIcon` 语义枚举选择单元格，避免 UI 调用处依赖裸索引。
 
 ## 固定步进所有权
 
@@ -106,7 +136,7 @@ Gameplay 每一刻只在一块屏幕的逻辑坐标帧中运行。该坐标帧�
 
 ## 发布门槛
 
-- 自动基线：Engine `12/12`、Gameplay `16/16`、Desktop `29/29`，Windows 原生验收控制器纯逻辑测试 `5/5`；solution Release build 必须为 `0 warning / 0 error`。
+- 自动基线：Engine、Gameplay、Desktop 和 Windows 原生验收控制器的纯逻辑 self-tests 必须按当次命令输出全部通过；solution Release build 必须为 `0 warning / 0 error`。其中 Gameplay/Desktop 还需覆盖注册表扩展、双等位遗传/突变、生命周期/经济、快照续跑、极端表型、四支撑腿边界、管理事务、点击仲裁和 atlas 资源契约。
 - Windows 真机：在解锁且无人操作的混合 DPI 交互桌面依次通过 Win32 primitives smoke 与 `--production ... --require-mixed-dpi`（均不得使用 `--allow-skip`），再补运行中跨屏、热插拔、右键/拖动/capture、HWND rebuild 与长期 GDI/CPU 观察。
 - macOS 真机：Retina/非 Retina，内置+外接屏、普通桌面 Spaces、解锁状态下真实点击穿透且应用不激活/不抢焦点；Apple Silicon 与 Intel 分别验证。覆盖其他应用的原生全屏窗口是额外能力，不属于当前原生层级契约。
 - 对截图做几何容差比较，而不是跨操作系统逐像素哈希比较。

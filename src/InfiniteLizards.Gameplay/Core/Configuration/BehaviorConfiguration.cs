@@ -113,10 +113,18 @@ internal sealed record SpeedConfiguration
     }
 }
 
+internal enum PointerResponseMode
+{
+    Chase,
+    Avoid
+}
+
 internal sealed record PointerChaseConfiguration
 {
+    public PointerResponseMode ResponseMode { get; init; } = PointerResponseMode.Chase;
     public float TriggerMinimumDistance { get; init; } = 20f;
     public float TriggerMaximumDistance { get; init; } = 330f;
+    public float AvoidanceDistance { get; init; } = 160f;
     public float RearmDistance { get; init; } = 360f;
     public float LostDistance { get; init; } = 430f;
     public float AttentionDuration { get; init; } = 0.12f;
@@ -138,7 +146,22 @@ internal sealed record PointerChaseConfiguration
 
     internal void Validate(List<string> failures)
     {
+        if (!Enum.IsDefined(typeof(PointerResponseMode), ResponseMode))
+        {
+            failures.Add($"Invalid pointer response mode: {ResponseMode}.");
+        }
         BehaviorConfiguration.ValidateRange(TriggerMinimumDistance, TriggerMaximumDistance, 0f, "pointer trigger distance", failures);
+        BehaviorConfiguration.RequirePositive(AvoidanceDistance, "pointer avoidance distance", failures);
+        if (ResponseMode == PointerResponseMode.Avoid &&
+            (AvoidanceDistance <= TriggerMinimumDistance ||
+             AvoidanceDistance >= TriggerMaximumDistance ||
+             AvoidanceDistance >= RearmDistance ||
+             AvoidanceDistance >= LostDistance))
+        {
+            failures.Add(
+                "pointer avoidance distance must be greater than trigger minimum " +
+                "and less than trigger maximum/rearm/lost distances.");
+        }
         if (RearmDistance <= TriggerMaximumDistance || LostDistance <= TriggerMaximumDistance)
         {
             failures.Add("pointer rearm/lost distances must be greater than trigger maximum distance.");

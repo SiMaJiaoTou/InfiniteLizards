@@ -161,8 +161,12 @@ internal sealed class PointerChaseController
         }
 
         var distance = Vector2.Distance(position, pointer.Position);
+        var responseMaximumDistance =
+            _configuration.ResponseMode == PointerResponseMode.Avoid
+                ? _configuration.AvoidanceDistance
+                : _configuration.TriggerMaximumDistance;
         return distance >= _configuration.TriggerMinimumDistance &&
-               distance <= _configuration.TriggerMaximumDistance;
+               distance <= responseMaximumDistance;
     }
 
     private void Track(Vector2 position, float dt)

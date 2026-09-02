@@ -38,7 +38,8 @@ internal sealed class LizardGameModule : IDesktopPetGame<LizardRenderFrame>
             appearance,
             profile.Gait,
             profile.SecondaryMotion,
-            profile.Rendering);
+            profile.Rendering,
+            profile.VisualPhenotype);
         var modelToWorld = appearance.VisualScale;
         var canvasSizeWorld = appearance.RenderCanvasSize * modelToWorld;
         Metrics = new DesktopPetMetrics(

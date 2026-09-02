@@ -15,6 +15,15 @@ macOS:   ~/Library/Application Support/DesktopLizard/lizard-settings.json
 
 第一次启动会尝试写出包含全部字段和默认值的完整文件，并持久化 `IndividualSeed`；写入失败时仅在当前会话使用内存配置。右键蜥蜴后选择“编辑个体配置（重启后生效）”可以直接打开它。
 
+繁育进度不属于这份物种/桌宠调参 JSON。普通模式会在有效配置文件同目录单独维护：
+
+```text
+Windows: %LOCALAPPDATA%\DesktopLizard\breeding-world.json
+macOS:   ~/Library/Application Support/DesktopLizard/breeding-world.json
+```
+
+使用 `--config=/some/place/lizard-settings.json` 时，繁育存档也会放在 `/some/place/breeding-world.json`。`--diagnostic` 或 `--multi-instance` 使用独立的会话临时世界并在退出时清理，防止测试/并行实例改写正式血统；`--debug-overlay` 仍使用正式持久世界。
+
 也可以给任意副本指定独立配置；跨平台宿主可使用绝对路径：
 
 ```bash
@@ -56,6 +65,16 @@ JSON 允许注释、末尾逗号和不区分大小写的属性名。配置在启
 | `IndividualVariation` | 个体间速度、时长、转向、步态、物理、颜色和转移权重的变化幅度 |
 
 数值稳定用的 epsilon、Win32 消息号等算法/平台不变量不属于宠物参数，因此不会暴露到 JSON。
+
+## 繁育世界与规则
+
+`breeding-world.json` 是严格校验的玩家状态快照，不是第二份可自由调参的配置。它记录 envelope schema、UTC 存档时间、下一次启动的桌宠 ID、trait registry ID、繁育规则、金币、ID 序号、确定性随机流状态，以及每只蜥蜴/蛋的完整双等位基因、年龄/孵化进度、冷却、地点、亲本和世代。
+
+当前领域默认基础孵化时间为 20 分钟、基础成熟时间为 6 小时、繁育冷却为 12 分钟。蛋的实际孵化时长由子代孵化/代谢与双方亲本护蛋效率对称决定；幼体成熟时长由成熟速度、成长活力和代谢决定；每只亲本的合群恢复、独处需求、社交恢复与求偶准备分别决定自己的冷却时长。所有倍率均为确定性有限值，买入/卖出价格仍是领域常量 5/1，不从 `lizard-settings.json` 读取。规则随世界快照保存，因此未来修改代码默认值也不会静默重写已有世界的节奏。
+
+正常启动会按 envelope 的 UTC 时间结算离线成长，最多推进 30 天并立即保存已结算结果。上次时间比当前时间晚超过 5 分钟时会暂停离线成长并给出警告。正常操作先写 `.tmp`，保留一份 `.bak` 后替换主文件；无效文件会尽量保留为 `.invalid-YYYYMMDD-HHMMSS`，再创建新的 10 金币世界。买、卖或繁育若无法持久化会恢复操作前快照，避免内存与磁盘经济分叉。
+
+不建议手工编辑繁育存档：未知字段、错误 schema/registry、越界 allele、无效生命周期或负经济都会被拒绝。纯新增遗传维度只能通过包含旧 trait 完整规范序列的 predecessor manifest 升级；删除、改名或改变既有语义需要专门迁移。当前 `infinite-lizards.genetics.v2` 对 v1 的唯一删除是没有实际消费面的 `lifecycle.longevity`，迁移会原样保留其余 137 个位点并明确丢弃该旧位点。具体流程见 [BREEDING.md](BREEDING.md)。
 
 ## 状态转移矩阵
 

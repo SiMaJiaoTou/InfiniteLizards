@@ -5,6 +5,12 @@ using Avalonia;
 using Avalonia.Controls;
 using DesktopPet.Engine;
 using InfiniteLizards.Desktop;
+using InfiniteLizards.Desktop.Management;
+using InfiniteLizards.Desktop.Persistence;
+using InfiniteLizards.Gameplay.Application;
+using InfiniteLizards.Gameplay.Breeding;
+using InfiniteLizards.Gameplay.Genetics;
+using InfiniteLizards.Gameplay.Phenotypes;
 using InfiniteLizards.Desktop.Platform;
 using InfiniteLizards.Desktop.Rendering;
 
@@ -40,6 +46,16 @@ var tests = new (string Name, Action Run)[]
     ("Minimum pupil radius expands input and canvas bounds", MinimumPupilRadiusIsCovered),
     ("Win32 shaped input uses SetWindowRgn without message forwarding", UsesNativeShapedInputContract),
     ("PetWindow preserves pre-Show and pointer-loss safety boundaries", PetWindowSafetyBoundaries),
+    ("Pet primary clicks remain gameplay-neutral until the drag threshold", PetPrimaryClickAndDragAreArbitrated),
+    ("Breeding manager persists buy, nest placement, breeding and economy atomically", BreedingManagementVerticalSlicePersists),
+    ("Breeding world recovers a corrupt primary save from its valid backup", BreedingWorldRecoversBackup),
+    ("Persistent, diagnostic and storage-fallback homes disclose durability", BreedingPersistenceModesAreExplicit),
+    ("Desktop identity and sell availability never misrepresent the running pet", DesktopIdentityAndSellAvailabilityAreStable),
+    ("High-salience structural traits change the portrait model", StructuralTraitsChangePortraitModel),
+    ("Complete visual and egg phenotypes reach bounded management portraits", CompleteVisualPhenotypesReachPortraits),
+    ("Extreme portrait morphology stays inside the square frame", ExtremePortraitMorphologyIsBounded),
+    ("Generated primary and utility icon atlases retain stable semantic cells", GeneratedIconAtlasesAreStable),
+    ("Breeding manager remains a focusable window isolated from the transparent pet", BreedingManagerWindowContractIsExplicit),
     ("Diagnostic mode owns a visible lifecycle-bound Avalonia panel", DiagnosticPanelIsVisibleAndDecoupled),
 };
 
@@ -1288,10 +1304,10 @@ static void MinimumPupilRadiusIsCovered()
         BindingFlags.Public | BindingFlags.Static)!;
     var baselineEnvelope = calculate.Invoke(
         null,
-        [appearance, gait, secondaryMotion, rendering])!;
+        [appearance, gait, secondaryMotion, rendering, null])!;
     var expandedEnvelope = calculate.Invoke(
         null,
-        [appearance, gait, secondaryMotion, expandedRendering])!;
+        [appearance, gait, secondaryMotion, expandedRendering, null])!;
     var normalRadius = (float)envelopeType.GetProperty("NormalModelRadius")!
         .GetValue(expandedEnvelope)!;
     var baselineNormalRadius = (float)envelopeType.GetProperty("NormalModelRadius")!
@@ -1422,6 +1438,20 @@ static void PetWindowSafetyBoundaries()
             "desktop.Shutdown();",
             StringComparison.Ordinal),
         "the context-menu exit path must remain independent of the native AppDelegate");
+    AssertTrue(contextMenuSource.Contains("BreedingIcon.Pause", StringComparison.Ordinal) &&
+               contextMenuSource.Contains("BreedingIcon.Play", StringComparison.Ordinal) &&
+               contextMenuSource.Contains("BreedingIcon.Center", StringComparison.Ordinal) &&
+               contextMenuSource.Contains("BreedingIcon.Settings", StringComparison.Ordinal) &&
+               contextMenuSource.Contains("BreedingIcon.Debug", StringComparison.Ordinal) &&
+               contextMenuSource.Contains("BreedingIcon.Exit", StringComparison.Ordinal),
+        "the cute context menu must retain distinct utility icons for every action");
+    AssertTrue(contextMenuSource.Contains(
+            "MenuFlyoutItemBackgroundPointerOver",
+            StringComparison.Ordinal) &&
+        contextMenuSource.Contains(
+            "MenuFlyoutItemBackgroundPressed",
+            StringComparison.Ordinal),
+        "the context menu must override Fluent template interaction colors");
     AssertTrue(source.Contains("else if (!hasPointer", StringComparison.Ordinal),
         "pointer sampling loss must immediately request click-through");
     AssertTrue(source.Contains("backend.ClearInputRegion(this);", StringComparison.Ordinal),
@@ -1496,10 +1526,10 @@ static void PetWindowSafetyBoundaries()
         "independently narrowing the Windows input-region transaction");
 
     var pointerPressStart = source.IndexOf(
-        "private void OnPointerPressed",
+        "private bool TryBeginDrag",
         StringComparison.Ordinal);
     var pointerPressEnd = source.IndexOf(
-        "private void OnPointerMoved",
+        "private void FinishDrag",
         pointerPressStart,
         StringComparison.Ordinal);
     var pointerPressSource = source[pointerPressStart..pointerPressEnd];
@@ -1806,6 +1836,790 @@ static void DiagnosticPanelIsVisibleAndDecoupled()
         "stepping guides must keep the WPF normal line width while active legs are emphasized");
 }
 
+static void PetPrimaryClickAndDragAreArbitrated()
+{
+    var arbiter = new PetPrimaryInteractionArbiter();
+    AssertTrue(arbiter.State == PetPrimaryInteractionState.Idle,
+        "a new interaction must be idle");
+    AssertTrue(arbiter.Begin(new System.Numerics.Vector2(10f, 20f)),
+        "a finite primary press must enter pending-click state");
+    AssertTrue(arbiter.State == PetPrimaryInteractionState.PendingClick,
+        "pressing must not begin gameplay drag");
+
+    var subThreshold = arbiter.Move(new System.Numerics.Vector2(13.99f, 20f));
+    AssertTrue(!subThreshold.BeginDrag && !subThreshold.RaiseClick && !subThreshold.EndDrag,
+        "movement below four DIPs must remain observational");
+    var click = arbiter.Release();
+    AssertTrue(click.RaiseClick && !click.BeginDrag && !click.EndDrag,
+        "release before the threshold must raise exactly one click");
+    AssertTrue(arbiter.State == PetPrimaryInteractionState.Idle,
+        "click release must clear gesture state");
+
+    AssertTrue(arbiter.Begin(new System.Numerics.Vector2(5f, 6f)),
+        "a second gesture must begin after click cleanup");
+    var threshold = arbiter.Move(new System.Numerics.Vector2(9f, 6f));
+    AssertTrue(threshold.BeginDrag && !threshold.RaiseClick,
+        "movement at four DIPs must begin drag exactly once");
+    AssertTrue(arbiter.State == PetPrimaryInteractionState.Dragging,
+        "the state must latch dragging after threshold crossing");
+    AssertTrue(!arbiter.Move(new System.Numerics.Vector2(30f, 40f)).BeginDrag,
+        "later drag movement must not restart the gameplay interaction");
+    var dragRelease = arbiter.Release();
+    AssertTrue(dragRelease.EndDrag && !dragRelease.RaiseClick,
+        "a dragged release must end drag without opening details");
+
+    AssertTrue(arbiter.Begin(new System.Numerics.Vector2(0f, 0f)),
+        "capture-loss case must start pending");
+    var pendingCancel = arbiter.Cancel();
+    AssertTrue(!pendingCancel.EndDrag && !pendingCancel.RaiseClick,
+        "capture loss during pending click must be silent");
+    AssertTrue(arbiter.Begin(new System.Numerics.Vector2(0f, 0f)),
+        "drag cancellation case must start pending");
+    _ = arbiter.Move(new System.Numerics.Vector2(4f, 0f));
+    var dragCancel = arbiter.Cancel();
+    AssertTrue(dragCancel.EndDrag && !dragCancel.RaiseClick,
+        "capture loss during an active drag must request gameplay cleanup");
+
+    var root = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../../"));
+    var petSource = File.ReadAllText(Path.Combine(
+        root, "src", "InfiniteLizards.Desktop", "PetWindow.cs"));
+    AssertTrue(petSource.Contains("PrimaryClicked?.Invoke", StringComparison.Ordinal) &&
+               petSource.Contains("_primaryInteraction.Move", StringComparison.Ordinal) &&
+               petSource.IndexOf("_primaryInteraction.Begin", StringComparison.Ordinal) <
+               petSource.IndexOf("_runtime.BeginPrimaryInteraction", StringComparison.Ordinal),
+        "PetWindow must route a pending click before gameplay BeginPrimaryInteraction");
+}
+
+static void BreedingManagementVerticalSlicePersists()
+{
+    var directory = Path.Combine(
+        Path.GetTempPath(),
+        $"InfiniteLizards-DesktopSelfTest-{Guid.NewGuid():N}");
+    var savePath = Path.Combine(directory, BreedingWorldStore.FileName);
+    try
+    {
+        string firstId;
+        string secondId;
+        EggPortraitModel? committedEggPortrait = null;
+        using (var source = new LizardBreedingManagementSource(
+                   new BreedingWorldStore(savePath, deleteOnDispose: false),
+                   seed: 0xD35C70FUL,
+                   nowUtc: DateTimeOffset.UtcNow))
+        {
+            AssertEqual(10, source.Current.Coins,
+                "a new independent breeding world must start with ten coins");
+            AssertEqual(5, source.Current.BuyPrice,
+                "the manager must expose the domain's five-coin buy price");
+            AssertEqual(1, source.Current.SellPrice,
+                "the manager must expose the domain's one-coin sell price");
+            AssertEqual(0, source.Current.Lizards.Length,
+                "a new world must start without silently importing the guide pet");
+            AssertTrue(source.RunningDesktopLizardId is null &&
+                       source.RunningDesktopLizardGenome is null,
+                "an empty startup must keep the legacy mascot identity explicit");
+
+            var firstBuy = source.BuyAsync().AsTask().GetAwaiter().GetResult();
+            var secondBuy = source.BuyAsync().AsTask().GetAwaiter().GetResult();
+            AssertTrue(firstBuy.Succeeded && secondBuy.Succeeded,
+                "the initial balance must buy two mature founders");
+            AssertEqual(0, source.Current.Coins,
+                "two five-coin purchases must consume the initial balance");
+            AssertEqual(2, source.Current.Lizards.Length,
+                "both purchased founders must appear in the collection");
+            AssertTrue(source.Current.Lizards.All(lizard => lizard.CanBreed),
+                "market founders must be mature and immediately breedable");
+
+            firstId = source.Current.Lizards[0].Id;
+            secondId = source.Current.Lizards[1].Id;
+            AssertTrue(source.RunningDesktopLizardId is null,
+                "buying must not silently hot-swap the legacy mascot");
+            AssertEqual(firstId, source.Current.NextDesktopLizardId!,
+                "the first purchase must be persisted as the next-launch desktop pet");
+            AssertTrue(source.GetPairAvailability(firstId, secondId).IsAllowed,
+                "two distinct mature founders must be accepted by the domain gate");
+            var bred = source.BreedAsync(firstId, secondId).AsTask().GetAwaiter().GetResult();
+            AssertTrue(bred.Succeeded,
+                "placing both parents into the stable nest must produce one egg");
+            AssertEqual(1, source.Current.Eggs.Length,
+                "successful breeding must surface the egg immediately");
+            committedEggPortrait = source.Current.Eggs[0].Shell;
+            var selected = source.SetDesktopLizardAsync(secondId)
+                .AsTask().GetAwaiter().GetResult();
+            AssertTrue(selected.Succeeded &&
+                       source.Current.NextDesktopLizardId == secondId,
+                "explicit desktop selection must be write-through and wait for restart");
+        }
+
+        AssertTrue(File.Exists(savePath),
+            "write-through commands must create breeding-world.json");
+        var envelope = File.ReadAllText(savePath);
+        AssertTrue(envelope.Contains("\"SavedAtUtc\"", StringComparison.Ordinal) &&
+                   envelope.Contains("\"Snapshot\"", StringComparison.Ordinal),
+            "the save must be a timestamped envelope instead of a bare snapshot");
+
+        using var store = new BreedingWorldStore(savePath, deleteOnDispose: false);
+        var loaded = store.LoadOrCreate(0xBAD5EEDUL, DateTimeOffset.UtcNow);
+        var restored = loaded.Simulation.CaptureSnapshot();
+        AssertEqual(0, restored.Coins,
+            "restart must retain the committed economy balance");
+        AssertEqual(2, restored.Lizards.Length,
+            "restart must retain both parents");
+        AssertEqual(1, restored.Eggs.Length,
+            "restart must retain the unhatched egg");
+        var restoredEggPhenotype = LizardTraitRegistry.Default.Express(
+            restored.Eggs[0].Genome);
+        AssertEqual(
+            BreedablePhenotypeCompiler.CompileEggAppearance(restoredEggPhenotype),
+            committedEggPortrait!.Appearance,
+            "the hatchery shell must be compiled from the persisted offspring genome");
+        AssertEqual(secondId, loaded.ActiveLizardId!,
+            "restart must retain the explicitly selected desktop identity");
+        AssertTrue(restored.Lizards.All(lizard =>
+                lizard.HabitatId == LizardBreedingManagementSource.BreedingNestHabitatId),
+            "both parents must be explicitly moved to one stable habitat before Breed");
+    }
+    finally
+    {
+        if (Directory.Exists(directory))
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+}
+
+static void BreedingWorldRecoversBackup()
+{
+    var directory = Path.Combine(
+        Path.GetTempPath(),
+        $"InfiniteLizards-BackupSelfTest-{Guid.NewGuid():N}");
+    var savePath = Path.Combine(directory, BreedingWorldStore.FileName);
+    var now = new DateTimeOffset(2032, 4, 5, 6, 7, 8, TimeSpan.Zero);
+    try
+    {
+        string activeId;
+        using (var store = new BreedingWorldStore(savePath, deleteOnDispose: false))
+        {
+            var created = store.LoadOrCreate(0xBAAC0FFUL, now);
+            var first = created.Simulation.BuyLizard("home-habitat");
+            AssertTrue(first.Succeeded && first.LizardId is not null,
+                "backup fixture must buy its first founder");
+            activeId = first.LizardId!;
+            store.Save(
+                created.Simulation.CaptureSnapshot(),
+                now.AddSeconds(1d),
+                activeId);
+            AssertTrue(created.Simulation.BuyLizard("home-habitat").Succeeded,
+                "backup fixture must commit a newer primary revision");
+            store.Save(
+                created.Simulation.CaptureSnapshot(),
+                now.AddSeconds(2d),
+                activeId);
+            AssertTrue(File.Exists(store.BackupPath),
+                "a second revision must retain the previous valid envelope as .bak");
+        }
+
+        File.WriteAllText(savePath, "{ definitely-not-valid-json");
+        using (var recoveredStore = new BreedingWorldStore(savePath, deleteOnDispose: false))
+        {
+            var recovered = recoveredStore.LoadOrCreate(0xDEADUL, now.AddSeconds(3d));
+            AssertEqual(5, recovered.Simulation.Coins,
+                "recovery must use the one-founder backup instead of resetting to ten coins");
+            AssertEqual(1, recovered.Simulation.LizardCount,
+                "recovery must preserve the backup collection");
+            AssertEqual(activeId, recovered.ActiveLizardId!,
+                "recovery must preserve the selected desktop identity");
+            AssertTrue(recovered.Warning?.Contains("备份恢复", StringComparison.Ordinal) == true,
+                "the player must be told that backup recovery occurred");
+            AssertTrue(Directory.EnumerateFiles(directory, "*.invalid-*").Any(),
+                "the corrupt primary must be preserved for diagnosis");
+
+            var validBackup = File.ReadAllText(recoveredStore.BackupPath);
+            File.WriteAllText(savePath, "{ another-invalid-primary");
+            recoveredStore.PromoteRecovered(
+                recovered.Simulation.CaptureSnapshot(),
+                now.AddSeconds(4d),
+                activeId);
+            AssertEqual(validBackup, File.ReadAllText(recoveredStore.BackupPath),
+                "recovery promotion must never rotate a known-invalid primary over the last valid backup");
+
+            var verified = recoveredStore.LoadOrCreate(0xDEADUL, now.AddSeconds(5d));
+            AssertEqual(5, verified.Simulation.Coins,
+                "the promoted backup must itself be a valid new primary save");
+        }
+    }
+    finally
+    {
+        if (Directory.Exists(directory))
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+}
+
+static void BreedingPersistenceModesAreExplicit()
+{
+    var directory = Path.Combine(
+        Path.GetTempPath(),
+        $"InfiniteLizards-PersistenceModeSelfTest-{Guid.NewGuid():N}");
+    Directory.CreateDirectory(directory);
+    try
+    {
+        using (var persistent = new LizardBreedingManagementSource(
+                   new BreedingWorldStore(
+                       Path.Combine(directory, "persistent", BreedingWorldStore.FileName),
+                       deleteOnDispose: false),
+                   0xA11CEUL,
+                   DateTimeOffset.UtcNow))
+        {
+            AssertTrue(persistent.Current.IsPersistent &&
+                       persistent.Current.PersistenceModeLabel.Contains("自动保存", StringComparison.Ordinal),
+                "a normal home must advertise durable automatic saves");
+        }
+
+        var diagnosticStore = BreedingWorldStore.Create(
+            Path.Combine(directory, "diagnostic", "lizard-settings.json"),
+            ephemeral: true);
+        AssertTrue(diagnosticStore.IsEphemeral,
+            "diagnostic sessions must use a delete-on-exit store");
+        using (var diagnostic = new LizardBreedingManagementSource(
+                   diagnosticStore,
+                   0xD1A6UL,
+                   DateTimeOffset.UtcNow))
+        {
+            AssertTrue(!diagnostic.Current.IsPersistent &&
+                       diagnostic.Current.PersistenceModeLabel.Contains("退出后不保存", StringComparison.Ordinal),
+                "diagnostic UI state must continuously disclose that progress is temporary");
+            AssertTrue(diagnostic.BuyAsync().AsTask().GetAwaiter().GetResult().Succeeded,
+                "temporary homes must still support gameplay");
+            AssertTrue(diagnostic.Current.NextDesktopLizardId is null &&
+                       diagnostic.Current.Lizards.All(lizard => !lizard.IsNextDesktopPet),
+                "buying in a temporary home must not claim an impossible next-launch desktop selection");
+            var selection = diagnostic.SetDesktopLizardAsync(diagnostic.Current.Lizards[0].Id)
+                .AsTask().GetAwaiter().GetResult();
+            AssertTrue(!selection.Succeeded &&
+                       selection.Message.Contains("临时家园", StringComparison.Ordinal) &&
+                       diagnostic.Current.NextDesktopLizardId is null,
+                "temporary writes must not claim a next-launch desktop selection was persisted");
+        }
+
+        var blocker = Path.Combine(directory, "not-a-directory");
+        File.WriteAllText(blocker, "blocks child paths");
+        using var fallback = App.CreateManagementSource(
+            Path.Combine(blocker, "lizard-settings.json"),
+            ephemeral: false,
+            seed: 0xFA11BACUL);
+        AssertTrue(!fallback.Current.IsPersistent &&
+                   fallback.Current.PersistenceModeLabel.Contains("退出后不保存", StringComparison.Ordinal),
+            "an IO fallback must surface its ephemeral durability instead of silently mimicking a saved home");
+
+        var root = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../../"));
+        var managerSource = File.ReadAllText(Path.Combine(
+            root, "src", "InfiniteLizards.Desktop", "Management", "GameManagerWindow.cs"));
+        AssertTrue(managerSource.Contains("_persistenceText", StringComparison.Ordinal) &&
+                   managerSource.Contains("⚠ 临时家园：退出后不会保存", StringComparison.Ordinal),
+            "the manager header and notice area must keep temporary mode visible after actions");
+    }
+    finally
+    {
+        if (Directory.Exists(directory))
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+}
+
+static void DesktopIdentityAndSellAvailabilityAreStable()
+{
+    var directory = Path.Combine(
+        Path.GetTempPath(),
+        $"InfiniteLizards-IdentitySelfTest-{Guid.NewGuid():N}");
+    var savePath = Path.Combine(directory, BreedingWorldStore.FileName);
+    try
+    {
+        string remainingId;
+        using (var source = new LizardBreedingManagementSource(
+                   new BreedingWorldStore(savePath, deleteOnDispose: false),
+                   0xAC71FEUL,
+                   DateTimeOffset.UtcNow))
+        {
+            AssertTrue(source.BuyAsync().AsTask().GetAwaiter().GetResult().Succeeded &&
+                       source.BuyAsync().AsTask().GetAwaiter().GetResult().Succeeded,
+                "identity fixture must buy two founders");
+            var firstId = source.Current.Lizards[0].Id;
+            var secondId = source.Current.Lizards[1].Id;
+            AssertTrue(source.BreedAsync(firstId, secondId)
+                    .AsTask().GetAwaiter().GetResult().Succeeded,
+                "an egg must keep the bloodline recoverable while one parent is sold");
+            AssertTrue(source.SellAsync(firstId).AsTask().GetAwaiter().GetResult().Succeeded,
+                "selling one non-running parent must remain possible with an egg and survivor");
+            remainingId = source.Current.Lizards.Single().Id;
+            var remaining = source.Current.Lizards.Single();
+            AssertTrue(!remaining.CanSell &&
+                       remaining.SellDisabledReason.Contains("恢复血统", StringComparison.Ordinal),
+                "the UI must disable a sale that would leave fewer than two recoverable breeding units");
+        }
+
+        using (var restarted = new LizardBreedingManagementSource(
+                   new BreedingWorldStore(savePath, deleteOnDispose: false),
+                   0xAC71FEUL,
+                   DateTimeOffset.UtcNow))
+        {
+            AssertEqual(remainingId, restarted.RunningDesktopLizardId!,
+                "the persisted selection must become the immutable running identity on restart");
+            AssertTrue(restarted.RunningDesktopLizardGenome is not null,
+                "the running desktop profile must come from the selected genome");
+            var blocked = restarted.SellAsync(remainingId)
+                .AsTask().GetAwaiter().GetResult();
+            AssertTrue(!blocked.Succeeded &&
+                       blocked.Message.Contains("当前桌宠", StringComparison.Ordinal),
+                "the running desktop individual must never be sold out from under its live portrait");
+
+            restarted.AdvanceAsync(TimeSpan.FromDays(1d))
+                .AsTask().GetAwaiter().GetResult();
+            var replacement = restarted.Current.Lizards
+                .First(lizard => lizard.Id != remainingId);
+            AssertTrue(restarted.SetDesktopLizardAsync(replacement.Id)
+                    .AsTask().GetAwaiter().GetResult().Succeeded,
+                "a replacement must be explicitly selectable for the next launch");
+            AssertEqual(remainingId, restarted.RunningDesktopLizardId!,
+                "selection must not claim a hot swap that the runtime did not perform");
+            AssertEqual(replacement.Id, restarted.Current.NextDesktopLizardId!,
+                "the replacement must be visibly marked as next-launch only");
+            restarted.MarkRunningDesktopFallback();
+            AssertTrue(restarted.RunningDesktopLizardId is null &&
+                       restarted.RunningDesktopLizardGenome is null &&
+                       restarted.Current.Lizards.All(lizard => !lizard.IsRunningDesktopPet) &&
+                       restarted.Current.NextDesktopLizardId == replacement.Id,
+                "a profile fallback must expose the legacy mascot without discarding the next-launch selection");
+        }
+
+        var exhaustedPath = Path.Combine(directory, "identity-exhausted.json");
+        var simulation = BreedingSimulation.Create(0x1DUL, initialCoins: 10);
+        var first = simulation.BuyLizard("home-habitat");
+        var second = simulation.BuyLizard("home-habitat");
+        AssertTrue(first.Succeeded && second.Succeeded,
+            "identity exhaustion fixture must contain a valid pair");
+        using (var exhaustedStore = new BreedingWorldStore(exhaustedPath, deleteOnDispose: false))
+        {
+            exhaustedStore.Save(
+                simulation.CaptureSnapshot() with { NextSequence = long.MaxValue },
+                DateTimeOffset.UtcNow,
+                first.LizardId);
+        }
+        using (var exhausted = new LizardBreedingManagementSource(
+                   new BreedingWorldStore(exhaustedPath, deleteOnDispose: false),
+                   0x1DUL,
+                   DateTimeOffset.UtcNow))
+        {
+            AssertTrue(!exhausted.Current.IdentityCapacityAvailable &&
+                       !exhausted.Current.CanBuy &&
+                       exhausted.Current.BuyDisabledReason.Contains("编号空间", StringComparison.Ordinal),
+                "buy availability must explain identity sequence exhaustion");
+            AssertTrue(!exhausted.GetPairAvailability(
+                    exhausted.Current.Lizards[0].Id,
+                    exhausted.Current.Lizards[1].Id).IsAllowed,
+                "breed availability must also reject identity sequence exhaustion");
+        }
+    }
+    finally
+    {
+        if (Directory.Exists(directory))
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+}
+
+static void StructuralTraitsChangePortraitModel()
+{
+    var registry = LizardTraitRegistry.Default;
+    static LizardGenome GenomeWith(
+        LizardTraitRegistry registry,
+        double baseline,
+        params (string Id, double Allele)[] overrides)
+    {
+        var values = overrides.ToDictionary(value => value.Id, value => value.Allele);
+        return new LizardGenome(
+            LizardGenome.CurrentSchemaVersion,
+            registry.RegistryId,
+            registry.Descriptors
+                .OrderBy(descriptor => descriptor.Id, StringComparer.Ordinal)
+                .Select(descriptor =>
+                {
+                    var allele = values.GetValueOrDefault(descriptor.Id, baseline);
+                    return new GenePair(descriptor.Id, allele, allele);
+                })
+                .ToImmutableArray());
+    }
+
+    var restrainedGenome = GenomeWith(
+        registry,
+        0d,
+        ("head.pupil-shape", 0d));
+    var ornateGenome = GenomeWith(
+        registry,
+        1d,
+        ("head.pupil-shape", 1d));
+    var restrained = LizardBreedingManagementSource.CreatePortrait(restrainedGenome);
+    var ornate = LizardBreedingManagementSource.CreatePortrait(ornateGenome);
+
+    AssertTrue(restrained.PupilShape != ornate.PupilShape &&
+               restrained.WhiskerPairs != ornate.WhiskerPairs &&
+               restrained.DorsalFinShape != ornate.DorsalFinShape &&
+               restrained.TailSpikeCount != ornate.TailSpikeCount,
+        "pupil, whisker, fin and tail-spike loci must change bounded drawing parameters");
+    AssertTrue(ornate.HasHeadHorns && ornate.HasHeadCrest &&
+               ornate.HasSideFins && ornate.HasGillTufts &&
+               ornate.HornLength > restrained.HornLength &&
+               ornate.SideFinSize > restrained.SideFinSize,
+        "horns, crest, side fins and external gills must reach the portrait model");
+
+    foreach (var allele in new[] { 0.15d, 0.9d, 1d })
+    {
+        var genome = GenomeWith(
+            registry,
+            0.5d,
+            (DefaultLizardTraitIds.DorsalFinPresent, 1d),
+            ("pattern.type", allele),
+            ("head.pupil-shape", allele),
+            ("appendage.dorsal-fin.shape", allele));
+        var phenotype = registry.Express(genome);
+        var visual = BreedablePhenotypeCompiler.CompileVisual(phenotype);
+        var portrait = LizardBreedingManagementSource.CreatePortrait(genome);
+        AssertEqual(visual.Pattern.Kind, portrait.PatternKind,
+            $"pattern choice at normalized {allele} must use registry/compiler decoding");
+        AssertEqual(visual.Body.PupilShape, portrait.PupilShape,
+            $"pupil choice at normalized {allele} must use registry/compiler decoding");
+        AssertEqual(visual.Appendages.DorsalFin.Shape, portrait.DorsalFinShape,
+            $"dorsal-fin choice at normalized {allele} must use registry/compiler decoding");
+    }
+
+    var patternKinds = Enumerable.Range(0, Enum.GetValues<BreedablePatternKind>().Length)
+        .Select(index => LizardBreedingManagementSource.CreatePortrait(
+            GenomeWith(
+                registry,
+                0.5d,
+                ("pattern.type", (index + 0.25d) /
+                    Enum.GetValues<BreedablePatternKind>().Length))))
+        .Select(portrait => portrait.PatternKind)
+        .ToHashSet();
+    AssertEqual(Enum.GetValues<BreedablePatternKind>().Length, patternKinds.Count,
+        "all eight registry pattern choices must remain distinct in the portrait model");
+
+    var root = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../../"));
+    var portraitSource = File.ReadAllText(Path.Combine(
+        root, "src", "InfiniteLizards.Desktop", "Management", "LizardPortraitView.cs"));
+    AssertTrue(Enum.GetValues<BreedablePatternKind>()
+            .Where(kind => kind != BreedablePatternKind.Solid)
+            .All(kind => portraitSource.Contains(
+                $"case BreedablePatternKind.{kind}",
+                StringComparison.Ordinal)) &&
+        portraitSource.Contains("DrawLongitudinalStripes", StringComparison.Ordinal) &&
+        portraitSource.Contains("DrawReticulation", StringComparison.Ordinal) &&
+        portraitSource.Contains("DrawStarSpeckles", StringComparison.Ordinal) &&
+        !portraitSource.Contains("PatternKind %", StringComparison.Ordinal),
+        "every non-solid pattern kind must have a distinct bounded drawing branch");
+}
+
+static void CompleteVisualPhenotypesReachPortraits()
+{
+    var registry = LizardTraitRegistry.Default;
+    var lowGenome = CreateUniformTraitGenome(registry, 0d);
+    var highGenome = CreateUniformTraitGenome(registry, 1d);
+    var lowPhenotype = registry.Express(lowGenome);
+    var highPhenotype = registry.Express(highGenome);
+    var expectedLow = BreedablePhenotypeCompiler.CompileVisual(lowPhenotype);
+    var expectedHigh = BreedablePhenotypeCompiler.CompileVisual(highPhenotype);
+    var low = LizardBreedingManagementSource.CreatePortrait(lowGenome);
+    var high = LizardBreedingManagementSource.CreatePortrait(highGenome);
+
+    AssertEqual(expectedLow, low.Visual,
+        "the management boundary must preserve every low visual-contract field");
+    AssertEqual(expectedHigh, high.Visual,
+        "the management boundary must preserve every high visual-contract field");
+    AssertTrue(low.Visual.Body.SnoutLengthRatio < high.Visual.Body.SnoutLengthRatio &&
+               low.Visual.Body.SnoutShape != high.Visual.Body.SnoutShape &&
+               !low.Visual.Appendages.NeckFrill.IsPresent &&
+               high.Visual.Appendages.NeckFrill.IsPresent,
+        "snout length/shape and neck frill must create a salient low/high split");
+    AssertTrue(low.Visual.Limbs.FootShape != high.Visual.Limbs.FootShape &&
+               low.Visual.Limbs.ToeCount < high.Visual.Limbs.ToeCount &&
+               low.Visual.Limbs.ClawLengthRatio < high.Visual.Limbs.ClawLengthRatio &&
+               !low.Visual.Limbs.HasWebbing && high.Visual.Limbs.HasWebbing &&
+               low.Visual.Limbs.GripPadSizeRatio < high.Visual.Limbs.GripPadSizeRatio,
+        "foot shape, toes, claws, webbing and pads must create a salient low/high split");
+    AssertTrue(low.Visual.Skin.ScaleSizeRatio < high.Visual.Skin.ScaleSizeRatio &&
+               low.Visual.Skin.Roughness < high.Visual.Skin.Roughness &&
+               low.Visual.Skin.Gloss < high.Visual.Skin.Gloss &&
+               low.Visual.Skin.Translucency < high.Visual.Skin.Translucency,
+        "all four skin dimensions must reach the portrait model");
+    AssertTrue(low.Visual.Tail.SegmentCount < high.Visual.Tail.SegmentCount &&
+               low.Visual.Tail.Flexibility < high.Visual.Tail.Flexibility &&
+               !low.Visual.Tail.Fork.IsPresent && high.Visual.Tail.Fork.IsPresent &&
+               low.Visual.Tail.Club.SpikeLengthRatio < high.Visual.Tail.Club.SpikeLengthRatio &&
+               low.Visual.Tail.Sail.LengthRatio < high.Visual.Tail.Sail.LengthRatio,
+        "tail segmentation, flex, fork, sail length and club spikes must remain visible inputs");
+
+    var distinctEggGenome = CreateUniformTraitGenome(registry, 0.55d);
+    var distinctEggPhenotype = registry.Express(distinctEggGenome);
+    var lowEgg = LizardBreedingManagementSource.CreateEggPortrait(lowGenome, -3d);
+    var highEgg = LizardBreedingManagementSource.CreateEggPortrait(distinctEggGenome, 4d);
+    AssertEqual(
+        BreedablePhenotypeCompiler.CompileEggAppearance(lowPhenotype),
+        lowEgg.Appearance,
+        "low egg shell appearance must come from the offspring genome");
+    AssertEqual(
+        BreedablePhenotypeCompiler.CompileEggAppearance(distinctEggPhenotype),
+        highEgg.Appearance,
+        "high egg shell appearance must come from the offspring genome");
+    AssertNear(0d, lowEgg.Progress, 0d,
+        "egg portrait progress must clamp below zero");
+    AssertNear(1d, highEgg.Progress, 0d,
+        "egg portrait progress must clamp above one");
+    AssertTrue(lowEgg.Appearance.Pattern != highEgg.Appearance.Pattern &&
+               lowEgg.Appearance.HueDegrees != highEgg.Appearance.HueDegrees,
+        "low/high egg shell genes must remain distinguishable in the card contract");
+
+    var root = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../../"));
+    var portraitSource = File.ReadAllText(Path.Combine(
+        root, "src", "InfiniteLizards.Desktop", "Management", "LizardPortraitView.cs"));
+    var eggSource = File.ReadAllText(Path.Combine(
+        root, "src", "InfiniteLizards.Desktop", "Management", "EggPortraitView.cs"));
+    AssertTrue(Enum.GetValues<BreedableSnoutShape>().All(shape =>
+            portraitSource.Contains($"case BreedableSnoutShape.{shape}", StringComparison.Ordinal)),
+        "every snout shape must have a distinct drawing branch");
+    AssertTrue(Enum.GetValues<BreedableFootShape>().All(shape =>
+            portraitSource.Contains($"case BreedableFootShape.{shape}", StringComparison.Ordinal)),
+        "every foot shape must have a distinct drawing branch");
+    AssertTrue(Enum.GetValues<BreedableEggPatternKind>().All(pattern =>
+            eggSource.Contains($"case BreedableEggPatternKind.{pattern}", StringComparison.Ordinal)),
+        "every egg shell pattern must have a distinct drawing branch");
+
+    var requiredVisualTokens = new[]
+    {
+        "Iridescence", "Melanin", "HeightRatio", "ShoulderMassRatio",
+        "HipMassRatio", "Taper", "NeckLengthRatio", "BellyRoundness",
+        "SpineArch", "Body.Flexibility", "HeadWidthRatio", "SnoutLengthRatio",
+        "EyeSizeRatio", "EyeSpacingRatio", "ThicknessRatio", "FrontRearRatio",
+        "FootSizeRatio", "ToeCount", "ClawLengthRatio", "HasWebbing",
+        "WebbingAmount", "GripPadSizeRatio", "LeftRightAsymmetry",
+        "ScaleSizeRatio", "Roughness", "Gloss", "Translucency",
+        "StripeWidth", "StripeCount", "Symmetry", "EdgeSoftness",
+        "IsGlowing", "GlowIntensity", "BaseThicknessRatio", "tail.Flexibility",
+        "tail.SegmentCount", "Sail.LengthRatio", "Club.SpikeLengthRatio",
+        "tail.Fork"
+    };
+    AssertTrue(requiredVisualTokens.All(token =>
+            portraitSource.Contains(token, StringComparison.Ordinal)),
+        "every public visual closure field must be consumed by the square renderer");
+
+    AssertTrue(
+        LizardPortraitView.NormalizeHeadCrestHeight(1d) <
+        LizardPortraitView.NormalizeHeadCrestHeight(1.5d),
+        "the legal 1.0-1.5 crest-height range must remain visually distinguishable");
+    AssertNear(1d, LizardPortraitView.NormalizeHeadCrestHeight(1.5d), 0d,
+        "the maximum legal crest height must consume the full drawing range");
+
+    var solidGlow = low.Visual.Pattern with
+    {
+        Kind = BreedablePatternKind.Solid,
+        IsGlowing = true,
+        GlowIntensity = 1f
+    };
+    AssertTrue(LizardPortraitView.CalculatePatternGlowOpacity(solidGlow) > 0d &&
+               LizardPortraitView.CalculatePatternGlowOpacity(
+                   solidGlow with { IsGlowing = false }) == 0d,
+        "glow presence and intensity must remain visible even for a solid pattern");
+
+    var managerSource = File.ReadAllText(Path.Combine(
+        root, "src", "InfiniteLizards.Desktop", "Management", "GameManagerWindow.cs"));
+    AssertTrue(managerSource.Contains("Model = egg.Shell", StringComparison.Ordinal) &&
+               managerSource.Contains("Model = egg.Preview", StringComparison.Ordinal),
+        "hatchery cards must show both the genetic shell and bounded offspring preview");
+}
+
+static void ExtremePortraitMorphologyIsBounded()
+{
+    var registry = LizardTraitRegistry.Default;
+    foreach (var baseline in new[] { 0d, 1d })
+    {
+        var portrait = LizardBreedingManagementSource.CreatePortrait(
+            CreateUniformTraitGenome(registry, baseline));
+        var bounds = LizardPortraitView.CalculatePortraitBounds(portrait);
+        AssertTrue(double.IsFinite(bounds.X) &&
+                   double.IsFinite(bounds.Y) &&
+                   double.IsFinite(bounds.Width) &&
+                   double.IsFinite(bounds.Height),
+            $"baseline {baseline} portrait bounds must stay finite");
+        AssertTrue(bounds.X >= 0d && bounds.Y >= 0d &&
+                   bounds.Right <= 1d && bounds.Bottom <= 1d,
+            $"baseline {baseline} portrait content {bounds} must fit the square frame");
+    }
+
+    AssertEqual(BreedableLimbMorphology.MaximumPresentationLegCount,
+        LizardPortraitView.MaximumRenderedLegs,
+        "portrait leg primitives must be capped by the public phenotype budget");
+    AssertEqual(BreedableLimbMorphology.MaximumVisibleLegSegmentCount,
+        LizardPortraitView.MaximumRenderedLegSegments,
+        "portrait leg segments must be capped by the public phenotype budget");
+    AssertEqual(70, LizardPortraitView.MaximumRenderedToes,
+        "ten presentation legs with seven toes each must be the hard toe budget");
+    AssertEqual(36, LizardPortraitView.MaximumRenderedSkinMarks,
+        "skin texture must have a small deterministic mark ceiling");
+    AssertEqual(18, LizardPortraitView.MaximumRenderedTailSegments,
+        "tail segmentation must have a hard renderer ceiling");
+    AssertEqual(BreedableTailSpikes.MaximumCount,
+        LizardPortraitView.MaximumRenderedTailSpikes,
+        "tail spikes must be capped by the public phenotype maximum");
+    var maximumSpikeParameters = Enumerable
+        .Range(0, BreedableTailSpikes.MaximumCount)
+        .Select(index => LizardPortraitView.CalculateTailSpikeParameter(
+            index,
+            BreedableTailSpikes.MaximumCount))
+        .ToArray();
+    AssertEqual(BreedableTailSpikes.MaximumCount,
+        maximumSpikeParameters.Distinct().Count(),
+        "every legal tail spike must receive a distinct continuous Bezier anchor");
+    AssertTrue(maximumSpikeParameters.All(amount => amount is > 0d and < 1d) &&
+               maximumSpikeParameters.SequenceEqual(
+                   maximumSpikeParameters.OrderBy(amount => amount)),
+        "tail spike anchors must be ordered strictly inside the tail endpoints");
+    AssertEqual(18, EggPortraitView.MaximumFineSpeckles,
+        "egg speckles must remain bounded");
+    AssertEqual(8, EggPortraitView.MaximumLargeBlotches,
+        "egg blotches must remain bounded");
+    AssertEqual(4, EggPortraitView.MaximumRings,
+        "egg rings must remain bounded");
+    AssertEqual(12, EggPortraitView.MaximumHatchCrackSegments,
+        "hatching cracks must remain bounded");
+    AssertEqual(8, EggPortraitView.MaximumStars,
+        "egg stars must remain bounded");
+}
+
+static void GeneratedIconAtlasesAreStable()
+{
+    var allIcons = Enum.GetValues<BreedingIcon>();
+    AssertEqual(32, allIcons.Length,
+        "the two generated 4x4 atlases must expose exactly thirty-two semantic icons");
+    AssertEqual(0, (int)BreedingIcon.Collection,
+        "the original primary-atlas ordering must remain stable");
+    AssertEqual(15, (int)BreedingIcon.Home,
+        "the original primary-atlas range must remain stable");
+    AssertEqual(16, (int)BreedingIcon.Coin,
+        "utility icons must begin immediately after the primary atlas");
+    AssertEqual(31, (int)BreedingIcon.Refresh,
+        "refresh must remain the final utility-atlas cell");
+
+    foreach (var icon in allIcons)
+    {
+        var cell = BreedingAtlasIcon.ResolveCell(icon);
+        var expectedAtlas = (int)icon < 16
+            ? BreedingAtlasKind.Primary
+            : BreedingAtlasKind.Utility;
+        AssertEqual(expectedAtlas, cell.Atlas,
+            $"{icon} must resolve to its generated atlas");
+        AssertEqual((int)icon % 16, cell.TileIndex,
+            $"{icon} must preserve its semantic 4x4 cell index");
+        AssertTrue(cell.AssetUri.EndsWith(
+                expectedAtlas == BreedingAtlasKind.Primary
+                    ? "/breeding-icons-atlas.png"
+                    : "/cute-utility-icons-atlas.png",
+                StringComparison.Ordinal),
+            $"{icon} must expose the packaged atlas URI");
+
+        var source = BreedingAtlasIcon.CalculateSourceRect(
+            new PixelSize(1254, 1254),
+            cell.TileIndex);
+        AssertTrue(source.X >= 0d && source.Y >= 0d &&
+                   source.Width > 0d && source.Height > 0d &&
+                   source.Right <= 1254d && source.Bottom <= 1254d,
+            $"{icon} must resolve to a positive in-bounds source rectangle");
+        AssertNear(Math.Round(source.X), source.X, 0d,
+            $"{icon} source X must snap to a real pixel");
+        AssertNear(Math.Round(source.Y), source.Y, 0d,
+            $"{icon} source Y must snap to a real pixel");
+        AssertNear(Math.Round(source.Right), source.Right, 0d,
+            $"{icon} source right edge must snap to a real pixel");
+        AssertNear(Math.Round(source.Bottom), source.Bottom, 0d,
+            $"{icon} source bottom edge must snap to a real pixel");
+    }
+
+    var underflowCell = BreedingAtlasIcon.ResolveCell((BreedingIcon)(-100));
+    AssertEqual(BreedingAtlasKind.Primary, underflowCell.Atlas,
+        "negative icon values must clamp to the primary atlas");
+    AssertEqual(0, underflowCell.TileIndex,
+        "negative icon values must clamp to the first safe semantic cell");
+    AssertEqual(BreedingAtlasKind.Utility,
+        BreedingAtlasIcon.ResolveCell((BreedingIcon)1000).Atlas,
+        "overflow icon values must clamp to the final utility atlas");
+
+    var root = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../../"));
+    AssertTrue(File.Exists(Path.Combine(
+            root,
+            "src",
+            "InfiniteLizards.Desktop",
+            "Assets",
+            "UI",
+            "cute-utility-icons-atlas.png")),
+        "the generated utility atlas must be packaged with the desktop host");
+}
+
+static LizardGenome CreateUniformTraitGenome(
+    LizardTraitRegistry registry,
+    double allele) => new(
+    LizardGenome.CurrentSchemaVersion,
+    registry.RegistryId,
+    registry.Descriptors
+        .OrderBy(descriptor => descriptor.Id, StringComparer.Ordinal)
+        .Select(descriptor => new GenePair(descriptor.Id, allele, allele))
+        .ToImmutableArray());
+
+static void BreedingManagerWindowContractIsExplicit()
+{
+    var root = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../../"));
+    var managerPath = Path.Combine(
+        root, "src", "InfiniteLizards.Desktop", "Management", "GameManagerWindow.cs");
+    var managerSource = File.ReadAllText(managerPath);
+    AssertTrue(managerSource.Contains("Topmost = false", StringComparison.Ordinal) &&
+               managerSource.Contains("ShowActivated = true", StringComparison.Ordinal) &&
+               managerSource.Contains("SystemDecorations = SystemDecorations.Full", StringComparison.Ordinal) &&
+               managerSource.Contains("e.Cancel = true", StringComparison.Ordinal) &&
+               managerSource.Contains("Hide();", StringComparison.Ordinal),
+        "the manager must be an ordinary activatable close-to-hide window");
+    AssertTrue(!managerSource.Contains("SmallButton(\"", StringComparison.Ordinal),
+        "every management action button must carry an atlas icon");
+    AssertTrue(managerSource.Contains("RefreshTimedControls(after)", StringComparison.Ordinal) &&
+               managerSource.Contains("RequiresStructuralRefresh(before, after)", StringComparison.Ordinal) &&
+               !managerSource.Contains("_detailColumn", StringComparison.Ordinal),
+        "clock ticks must update timed controls in place and the detail drawer must overlay instead of squeezing pages");
+    AssertTrue(managerSource.Contains("BreedingIcon.Coin", StringComparison.Ordinal) &&
+               managerSource.Contains("BreedingIcon.MarketStall", StringComparison.Ordinal) &&
+               managerSource.Contains("BreedingIcon.Close", StringComparison.Ordinal) &&
+               managerSource.Contains("BreedingIcon.Remove", StringComparison.Ordinal) &&
+               managerSource.Contains("BreedingIcon.Desktop", StringComparison.Ordinal),
+        "the cute manager must use distinct utility icons for each player-visible action");
+    AssertTrue(managerSource.Contains("ButtonBackgroundPointerOver", StringComparison.Ordinal) &&
+               managerSource.Contains("ButtonBackgroundPressed", StringComparison.Ordinal),
+        "the scoped cute button palette must override Fluent template interaction colors");
+
+    var appSource = File.ReadAllText(Path.Combine(
+        root, "src", "InfiniteLizards.Desktop", "App.cs"));
+    AssertTrue(appSource.Contains("options.DiagnosticMode || options.AllowMultipleInstances", StringComparison.Ordinal) &&
+               appSource.Contains("petWindow.PrimaryClicked", StringComparison.Ordinal) &&
+               appSource.Contains("managerWindow.ShowDesktopPetDetails(activeLizardId)", StringComparison.Ordinal) &&
+               appSource.Contains("managementSource.MarkRunningDesktopFallback()", StringComparison.Ordinal) &&
+               appSource.Contains("InvalidDataException", StringComparison.Ordinal) &&
+               appSource.Contains("IndividualProfileFactory.CreateFromGenome", StringComparison.Ordinal),
+        "diagnostic sessions must be ephemeral, profile validation failures must degrade safely, pet clicks must target the active id, and restored genomes must drive the desktop phenotype");
+
+    var projectSource = File.ReadAllText(Path.Combine(
+        root, "src", "InfiniteLizards.Desktop", "InfiniteLizards.Desktop.csproj"));
+    AssertTrue(projectSource.Contains("Assets/UI/**", StringComparison.Ordinal) &&
+               File.Exists(Path.Combine(
+                   root, "src", "InfiniteLizards.Desktop", "Assets", "UI", "breeding-icons-atlas.png")),
+        "the generated 4x4 game icon atlas must be packaged as an Avalonia resource");
+}
+
 static DesktopPetInputRegion CreateEllipseRegion(double centerX) => new(
     ImmutableArray<DesktopPetBezierPath>.Empty,
     ImmutableArray<DesktopPetStrokedBezierPath>.Empty,
@@ -1870,9 +2684,8 @@ static void AssertTrue(bool condition, string message)
 }
 
 static void AssertEqual<T>(T expected, T actual, string message)
-    where T : IEquatable<T>
 {
-    if (!expected.Equals(actual))
+    if (!EqualityComparer<T>.Default.Equals(expected, actual))
     {
         throw new InvalidOperationException($"{message}: expected {expected}, actual {actual}");
     }

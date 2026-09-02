@@ -25,7 +25,7 @@ dotnet run --project tests/InfiniteLizards.Gameplay.SelfTests/InfiniteLizards.Ga
 dotnet run --project tests/InfiniteLizards.Desktop.SelfTests/InfiniteLizards.Desktop.SelfTests.csproj -c Release
 ```
 
-当前套件基线为 Engine `12/12`、Gameplay `16/16`、Desktop `29/29`。
+当前套件基线为 Engine `12/12`、Gameplay `20/20`、Desktop `40/40`。
 
 ### Windows 原生验收控制器
 
@@ -135,7 +135,7 @@ Apple Silicon 开发机上与当前交付包使用同一原生 runtime 的上一
 
 ## 当前可复现范围
 
-- 已建立可独立构建的 Engine、Gameplay、Desktop、三套无 UI SelfTests 与 Windows primitives/production 原生验收项目及 solution/CI 入口；当前三套测试定义为 `12 + 15 + 28` 项，原生验收控制器另有纯逻辑安全测试 `5/5`，不计入前三套数字。
+- 已建立可独立构建的 Engine、Gameplay、Desktop、三套无 UI SelfTests 与 Windows primitives/production 原生验收项目及 solution/CI 入口；当前三套测试定义为 `12 + 20 + 40` 项，原生验收控制器另有纯逻辑安全测试 `5/5`，不计入前三套数字。
 - Engine 覆盖固定步所有权/过载诊断、插件输入/状态/快照保护与随机拓扑；Gameplay 覆盖行为、步态、物理、配置、reset/rebase、420 帧跨 DPI/cadence 几何一致性，并使用 MSBuild/源码门禁保证 Gameplay 是领域文件的唯一编译所有者；Desktop 覆盖 Win32 放置、两阶段 render/region 事务、shaped-region、fail-closed、混合 DPI 拖动 rebase、macOS current-Space/命中策略与真实 Skia 栅格契约。
 - macOS arm64 与 osx-x64/Rosetta 的原生验收范围如上；win-x64 已完成交叉构建及 primitives/真实 production 两种验收入口，但 production 入口仍待 Windows 真机实际运行；osx-x64 仍需 Intel 真机补验，Windows arm64 也需单独发布和真机验收。
 - Developer ID notarization 未执行，因为它需要发布者自己的证书和 Apple 凭据。

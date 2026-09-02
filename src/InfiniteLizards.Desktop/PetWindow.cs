@@ -5,8 +5,10 @@ using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Media;
 using Avalonia.Platform;
+using Avalonia.Styling;
 using Avalonia.Threading;
 using DesktopPet.Engine;
+using InfiniteLizards.Desktop.Management;
 using InfiniteLizards.Desktop.Platform;
 
 namespace InfiniteLizards.Desktop;
@@ -27,6 +29,7 @@ internal sealed class PetWindow<TSnapshot> : Window, PetWindowHost
     private readonly IDesktopPetRenderCommitSource? _renderCommitSource;
     private readonly DesktopPetSurfacePlacementTransaction? _surfacePlacementTransaction;
     private readonly DesktopPetInputRegionTransaction? _inputRegionTransaction;
+    private readonly PetPrimaryInteractionArbiter _primaryInteraction = new();
     private DesktopPetDiagnosticTelemetry? _diagnosticTelemetry;
 
     private DisplayTopology? _topology;
@@ -56,6 +59,10 @@ internal sealed class PetWindow<TSnapshot> : Window, PetWindowHost
     public event EventHandler<DesktopPetDiagnosticSnapshot>? DiagnosticSnapshotUpdated;
     public event EventHandler<bool>? DebugOverlayEnabledChanged;
     public event EventHandler? DebugPathResetRequested;
+    public event EventHandler? PrimaryClicked;
+    public event EventHandler? ManagementRequested;
+    public event EventHandler? DetailsRequested;
+    public event EventHandler? ExitRequested;
 
     public bool DebugOverlayEnabled => _debugOverlayEnabled;
     public DesktopPetDebugSettings DebugSettings => _debugSettings;
@@ -783,45 +790,38 @@ internal sealed class PetWindow<TSnapshot> : Window, PetWindowHost
     {
         var point = e.GetCurrentPoint(_view);
         if (!point.Properties.IsLeftButtonPressed ||
-            _isDragging ||
+            _primaryInteraction.State != PetPrimaryInteractionState.Idle ||
             !HitTestPresentedSurface(point.Position) ||
-            _displaySpace is null ||
-            !_platform.TryGetGlobalPointer(out var devicePointer))
+            _displaySpace is null)
         {
             return;
         }
 
-        var pointer = _displaySpace.DeviceToWorld(devicePointer);
-        var pointerWorld = new Vector2((float)pointer.X, (float)pointer.Y);
-        var visibleCenter = PresentedSurfaceCenter(_runtime.Position);
-        var alignmentDelta = visibleCenter - _runtime.Position;
-        if (alignmentDelta != Vector2.Zero)
+        var local = ToVector(point.Position);
+        if (!_primaryInteraction.Begin(local))
         {
-            // Direct manipulation begins from what the user can actually see,
-            // not from simulation frames still waiting on the compositor.
-            _runtime.RebaseWorldPosition(alignmentDelta);
+            return;
         }
-        if (_surfacePlacementTransaction is { } transaction)
-        {
-            transaction.DiscardPending();
-            if (_presenter is IDesktopPetPresentationHitTester hitTester)
-            {
-                hitTester.DiscardUncommittedPresentations(
-                    transaction.LatestCommittedVersion);
-            }
-        }
-        _dragOffsetWorld = pointerWorld - visibleCenter;
-        _isDragging = true;
+
         SetClickThrough(false);
         _capturedPointer = e.Pointer;
         e.Pointer.Capture(_view);
-        _runtime.BeginPrimaryInteraction(_presenter.ViewToModel(point.Position));
-        RequestDebugPathReset();
         e.Handled = true;
     }
 
     private void OnPointerMoved(object? sender, PointerEventArgs e)
     {
+        if (_primaryInteraction.State == PetPrimaryInteractionState.PendingClick)
+        {
+            var local = e.GetPosition(_view);
+            var decision = _primaryInteraction.Move(ToVector(local));
+            if (decision.BeginDrag && !TryBeginDrag(local))
+            {
+                ClearPrimaryInteraction();
+                return;
+            }
+        }
+
         if (!_isDragging)
         {
             if (!_diagnosticMode &&
@@ -856,23 +856,75 @@ internal sealed class PetWindow<TSnapshot> : Window, PetWindowHost
 
     private void OnPointerReleased(object? sender, PointerReleasedEventArgs e)
     {
-        if (_isDragging && e.InitialPressMouseButton == MouseButton.Left)
+        if (e.InitialPressMouseButton != MouseButton.Left)
+        {
+            return;
+        }
+
+        var decision = _primaryInteraction.Release();
+        if (decision.EndDrag && _isDragging)
         {
             FinishDrag();
+            e.Handled = true;
+            return;
+        }
+        if (decision.RaiseClick)
+        {
+            ClearPrimaryInteraction();
+            PrimaryClicked?.Invoke(this, EventArgs.Empty);
             e.Handled = true;
         }
     }
 
     private void OnPointerCaptureLost(object? sender, PointerCaptureLostEventArgs e)
     {
-        if (_isDragging)
+        var decision = _primaryInteraction.Cancel();
+        if (decision.EndDrag && _isDragging)
         {
             FinishDrag();
+            return;
         }
+        ClearPrimaryInteraction(releaseCapture: false);
+    }
+
+    private bool TryBeginDrag(Point localPoint)
+    {
+        if (_displaySpace is null ||
+            !_platform.TryGetGlobalPointer(out var devicePointer))
+        {
+            return false;
+        }
+
+        var pointer = _displaySpace.DeviceToWorld(devicePointer);
+        var pointerWorld = new Vector2((float)pointer.X, (float)pointer.Y);
+        var visibleCenter = PresentedSurfaceCenter(_runtime.Position);
+        var alignmentDelta = visibleCenter - _runtime.Position;
+        if (alignmentDelta != Vector2.Zero)
+        {
+            // Direct manipulation begins from what the user can actually see,
+            // not from simulation frames still waiting on the compositor.
+            _runtime.RebaseWorldPosition(alignmentDelta);
+        }
+        if (_surfacePlacementTransaction is { } transaction)
+        {
+            transaction.DiscardPending();
+            if (_presenter is IDesktopPetPresentationHitTester hitTester)
+            {
+                hitTester.DiscardUncommittedPresentations(
+                    transaction.LatestCommittedVersion);
+            }
+        }
+
+        _dragOffsetWorld = pointerWorld - visibleCenter;
+        _isDragging = true;
+        _runtime.BeginPrimaryInteraction(_presenter.ViewToModel(localPoint));
+        RequestDebugPathReset();
+        return true;
     }
 
     private void FinishDrag()
     {
+        _primaryInteraction.Cancel();
         _isDragging = false;
         RequestDebugPathReset();
         var capturedPointer = _capturedPointer;
@@ -896,16 +948,53 @@ internal sealed class PetWindow<TSnapshot> : Window, PetWindowHost
         SetClickThrough(true);
     }
 
+    private void ClearPrimaryInteraction(bool releaseCapture = true)
+    {
+        _primaryInteraction.Cancel();
+        _isDragging = false;
+        var capturedPointer = _capturedPointer;
+        _capturedPointer = null;
+        if (releaseCapture)
+        {
+            capturedPointer?.Capture(null!);
+        }
+        if (!_contextMenuOpen)
+        {
+            SetClickThrough(true);
+        }
+    }
+
     private (ContextMenu Menu, MenuItem Pause) CreateContextMenu()
     {
-        var pause = new MenuItem { Header = "暂停散步" };
+        var home = CuteMenuItem(
+            "蜥蜴家园",
+            BreedingIcon.Home);
+        home.Click += (_, _) => ManagementRequested?.Invoke(this, EventArgs.Empty);
+
+        var details = CuteMenuItem(
+            "查看蜥蜴详情",
+            BreedingIcon.Details);
+        details.Click += (_, _) => DetailsRequested?.Invoke(this, EventArgs.Empty);
+
+        var pauseIcon = new BreedingAtlasIcon
+        {
+            Icon = BreedingIcon.Pause,
+            Width = 24d,
+            Height = 24d
+        };
+        var pause = CuteMenuItem(
+            "暂停散步",
+            pauseIcon);
         pause.Click += (_, _) =>
         {
             var paused = _runtime.TogglePaused();
             pause.Header = paused ? "继续散步" : "暂停散步";
+            pauseIcon.Icon = paused ? BreedingIcon.Play : BreedingIcon.Pause;
         };
 
-        var center = new MenuItem { Header = "回到当前屏幕中央" };
+        var center = CuteMenuItem(
+            "回到当前屏幕中央",
+            BreedingIcon.Center);
         center.Click += (_, _) =>
         {
             if (_displaySpace is null)
@@ -919,25 +1008,36 @@ internal sealed class PetWindow<TSnapshot> : Window, PetWindowHost
             RequestDebugPathReset();
         };
 
-        var debugOverlay = new MenuItem
-        {
-            Header = "显示调试信息",
-            ToggleType = MenuItemToggleType.CheckBox,
-            IsChecked = _debugOverlayEnabled
-        };
+        var debugOverlay = CuteMenuItem(
+            "显示调试信息",
+            BreedingIcon.Debug);
+        debugOverlay.ToggleType = MenuItemToggleType.CheckBox;
+        debugOverlay.IsChecked = _debugOverlayEnabled;
         debugOverlay.Click += (_, _) =>
             SetDebugOverlayEnabled(debugOverlay.IsChecked);
 
-        var editConfiguration = new MenuItem
+        var editConfiguration = CuteMenuItem(
+            "编辑个体配置（重启后生效）",
+            BreedingIcon.Settings);
+        editConfiguration.IsEnabled = !string.IsNullOrWhiteSpace(_configurationPath);
+        if (!editConfiguration.IsEnabled)
         {
-            Header = "编辑个体配置（重启后生效）",
-            IsEnabled = !string.IsNullOrWhiteSpace(_configurationPath)
-        };
+            ToolTip.SetTip(editConfiguration, "当前个体没有可编辑的配置文件");
+        }
         editConfiguration.Click += (_, _) => OpenConfigurationFile();
 
-        var exit = new MenuItem { Header = "退出" };
+        var exit = CuteMenuItem(
+            "退出 Infinite Lizards",
+            BreedingIcon.Exit,
+            isDanger: true);
         exit.Click += (_, _) =>
         {
+            var handler = ExitRequested;
+            if (handler is not null)
+            {
+                handler(this, EventArgs.Empty);
+                return;
+            }
             if (Application.Current?.ApplicationLifetime is
                 Avalonia.Controls.ApplicationLifetimes.IClassicDesktopStyleApplicationLifetime desktop)
             {
@@ -947,21 +1047,37 @@ internal sealed class PetWindow<TSnapshot> : Window, PetWindowHost
 
         var menu = new ContextMenu
         {
+            MinWidth = 286d,
+            Background = CuteGameUiTheme.Surface,
+            BorderBrush = CuteGameUiTheme.LineStrong,
+            BorderThickness = new Thickness(1d),
+            CornerRadius = new CornerRadius(16d),
+            Padding = new Thickness(7d),
+            FontFamily = CuteGameUiTheme.Font,
+            FontSize = 14d,
+            Foreground = CuteGameUiTheme.Ink,
+            WindowManagerAddShadowHint = true,
             ItemsSource = new object[]
             {
+                home,
+                details,
+                CuteMenuSeparator(),
                 pause,
                 center,
                 debugOverlay,
-                new Separator(),
+                CuteMenuSeparator(),
                 editConfiguration,
-                new Separator(),
+                CuteMenuSeparator(),
                 exit
             }
         };
+        ApplyCuteMenuStyles(menu);
         menu.Opening += (_, _) =>
         {
             _contextMenuOpen = true;
-            pause.Header = _runtime.IsPaused ? "继续散步" : "暂停散步";
+            var paused = _runtime.IsPaused;
+            pause.Header = paused ? "继续散步" : "暂停散步";
+            pauseIcon.Icon = paused ? BreedingIcon.Play : BreedingIcon.Pause;
             debugOverlay.IsChecked = _debugOverlayEnabled;
             SetClickThrough(false);
         };
@@ -971,6 +1087,115 @@ internal sealed class PetWindow<TSnapshot> : Window, PetWindowHost
             SetClickThrough(true);
         };
         return (menu, pause);
+    }
+
+    private static MenuItem CuteMenuItem(
+        string label,
+        BreedingIcon icon,
+        bool isDanger = false) => CuteMenuItem(
+            label,
+            new BreedingAtlasIcon
+            {
+                Icon = icon,
+                Width = 24d,
+                Height = 24d
+            },
+            isDanger);
+
+    private static MenuItem CuteMenuItem(
+        string label,
+        Control icon,
+        bool isDanger = false)
+    {
+        var item = new MenuItem
+        {
+            Header = label,
+            Icon = icon,
+            MinHeight = 42d,
+            Padding = new Thickness(10d, 5d, 14d, 5d),
+            Margin = new Thickness(1d, 2d),
+            CornerRadius = new CornerRadius(12d),
+            Foreground = isDanger
+                ? CuteGameUiTheme.DangerDeep
+                : CuteGameUiTheme.Ink,
+            FontFamily = CuteGameUiTheme.Font,
+            FontSize = 14d,
+            FontWeight = FontWeight.Medium
+        };
+        var interactionBackground = isDanger
+            ? CuteGameUiTheme.DangerSoft
+            : CuteGameUiTheme.MintSoft;
+        var interactionForeground = isDanger
+            ? CuteGameUiTheme.DangerDeep
+            : CuteGameUiTheme.Ink;
+        // MenuItem's Fluent template paints its own layout root, so changing
+        // MenuItem.Background alone would still show the platform blue/gray.
+        item.Resources["MenuFlyoutItemBackgroundPointerOver"] = interactionBackground;
+        item.Resources["MenuFlyoutItemBackgroundPressed"] = interactionBackground;
+        item.Resources["MenuFlyoutItemForegroundPointerOver"] = interactionForeground;
+        item.Resources["MenuFlyoutItemForegroundPressed"] = interactionForeground;
+        item.Classes.Add(isDanger ? "pocket-danger" : "pocket-item");
+        return item;
+    }
+
+    private static Separator CuteMenuSeparator() => new()
+    {
+        Height = 1d,
+        Margin = new Thickness(12d, 6d),
+        Background = CuteGameUiTheme.Line
+    };
+
+    private static void ApplyCuteMenuStyles(ContextMenu menu)
+    {
+        var standardItem = new Style(selector =>
+            selector.OfType<MenuItem>().Class("pocket-item"));
+        standardItem.Setters.Add(new Setter(
+            MenuItem.BackgroundProperty,
+            Brushes.Transparent));
+
+        var dangerItem = new Style(selector =>
+            selector.OfType<MenuItem>().Class("pocket-danger"));
+        dangerItem.Setters.Add(new Setter(
+            MenuItem.BackgroundProperty,
+            Brushes.Transparent));
+
+        var selectedItem = new Style(selector =>
+            selector.OfType<MenuItem>().Class("pocket-item").Class(":selected"));
+        selectedItem.Setters.Add(new Setter(
+            MenuItem.BackgroundProperty,
+            CuteGameUiTheme.MintSoft));
+
+        var hoveredItem = new Style(selector =>
+            selector.OfType<MenuItem>().Class("pocket-item").Class(":pointerover"));
+        hoveredItem.Setters.Add(new Setter(
+            MenuItem.BackgroundProperty,
+            CuteGameUiTheme.MintSoft));
+
+        var selectedDanger = new Style(selector =>
+            selector.OfType<MenuItem>().Class("pocket-danger").Class(":selected"));
+        selectedDanger.Setters.Add(new Setter(
+            MenuItem.BackgroundProperty,
+            CuteGameUiTheme.DangerSoft));
+
+        var hoveredDanger = new Style(selector =>
+            selector.OfType<MenuItem>().Class("pocket-danger").Class(":pointerover"));
+        hoveredDanger.Setters.Add(new Setter(
+            MenuItem.BackgroundProperty,
+            CuteGameUiTheme.DangerSoft));
+
+        var disabled = new Style(selector =>
+            selector.OfType<MenuItem>().Class(":disabled"));
+        disabled.Setters.Add(new Setter(
+            MenuItem.OpacityProperty,
+            0.48d));
+
+        menu.Styles.Add(standardItem);
+        menu.Styles.Add(dangerItem);
+        menu.Styles.Add(selectedItem);
+        menu.Styles.Add(hoveredItem);
+        menu.Styles.Add(selectedDanger);
+        menu.Styles.Add(hoveredDanger);
+        menu.Styles.Add(disabled);
     }
 
     public void SetDebugOverlayEnabled(bool enabled)
@@ -1016,6 +1241,13 @@ internal sealed class PetWindow<TSnapshot> : Window, PetWindowHost
 
     private void OnClosed(object? sender, EventArgs e)
     {
+        var decision = _primaryInteraction.Cancel();
+        if (decision.EndDrag && _isDragging)
+        {
+            _isDragging = false;
+            _runtime.EndPrimaryInteraction(_runtime.Position);
+        }
+        _capturedPointer = null;
         _isClosed = true;
         _frameTimer.Stop();
         _frameTimer.Tick -= OnFrameTimer;
@@ -1028,6 +1260,10 @@ internal sealed class PetWindow<TSnapshot> : Window, PetWindowHost
         _surfacePlacementTransaction?.Close();
         _platform.Dispose();
     }
+
+    private static Vector2 ToVector(Point point) => new(
+        (float)point.X,
+        (float)point.Y);
 
     private static string DisplayId(Screen screen, int index)
     {
